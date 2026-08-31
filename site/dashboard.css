@@ -1,0 +1,120 @@
+.shot {
+	--vscode-foreground: oklch(0.84 0 0); /* #CCCCCC */
+	--vscode-sideBar-background: oklch(0.205 0.012 122); /* #181A15 */
+	--vscode-editor-background: oklch(0.188 0.012 122); /* #141612 */
+	--vscode-descriptionForeground: oklch(0.68 0.02 118); /* #9AA08C */
+	--vscode-input-background: oklch(0.17 0.01 122); /* #11130F */
+	--vscode-input-foreground: oklch(0.9 0.01 117); /* #E4E6DC */
+	--vscode-input-border: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+	--vscode-focusBorder: oklch(0.749 0.103 121.55); /* #A3B86C */
+	--vscode-badge-background: oklch(0.42 0.02 122); /* #55594A */
+	--vscode-badge-foreground: oklch(0.96 0.01 117); /* #F2F4EA */
+	--vscode-editorWarning-foreground: oklch(0.8 0.13 82); /* #E2B15A */
+	--vscode-errorForeground: oklch(0.68 0.19 25); /* #E05555 */
+	--vscode-testing-iconPassed: oklch(0.8 0.12 145); /* #89D185 */
+	--vscode-testing-iconQueued: oklch(0.78 0.12 75); /* #E2B15A */
+	--vscode-list-hoverBackground: oklch(0.28 0.016 122); /* #2A2D24 */
+	--rs-olive: oklch(0.749 0.103 121.55); /* #A3B86C */
+	--rs-olive-deep: oklch(0.454 0.076 122.18); /* #4F5D2A */
+	--rs-surface: color-mix(in srgb, var(--vscode-editor-background) 62%, transparent);
+	--rs-border: color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
+	--rs-muted: var(--vscode-descriptionForeground);
+	width: 100%;
+	min-width: 0;
+	height: 100%;
+	overflow: hidden;
+	border: 1px solid color-mix(in srgb, var(--rs-olive) 22%, transparent);
+	border-radius: 14px;
+	color: var(--vscode-foreground);
+	background: var(--vscode-sideBar-background);
+	font: 13px/1.45 ui-sans-serif, system-ui, sans-serif;
+	letter-spacing: 0;
+	box-shadow: 0 24px 60px color-mix(in srgb, black 38%, transparent);
+}
+
+.shot * { box-sizing: border-box; }
+.shot h1, .shot h2, .shot h3, .shot p { margin: 0; }
+.shot strong { font-weight: 650; }
+.shot button, .shot .btnish {
+	color: var(--rs-olive);
+	background: color-mix(in srgb, var(--rs-olive) 7%, transparent);
+	border: 1px solid color-mix(in srgb, var(--rs-olive) 34%, transparent);
+	border-radius: 6px;
+	font: 600 12px/1 inherit;
+}
+.shot .primary, .shot .secondary, .shot .softButton { min-height: 31px; padding: 6px 10px; }
+.shot .wide { width: 100%; }
+.shot .eyebrow { color: var(--rs-olive); font-size: 10px; line-height: 1.2; letter-spacing: 0.12em; font-weight: 750; }
+.shot .brandMark { width: 48px; height: 48px; color: var(--rs-olive); }
+.shot .appHeader { display: flex; align-items: center; justify-content: space-between; padding: 13px 14px 11px; }
+.shot .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.shot .brand div { display: grid; min-width: 0; }
+.shot .brand span { color: var(--rs-olive); font-size: 9px; letter-spacing: 0.13em; font-weight: 750; }
+.shot .brand strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: -0.01em; }
+.shot .brand small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rs-muted); font-size: 10px; }
+.shot .iconButton { width: 30px; height: 30px; padding: 0; font-size: 16px; display: grid; place-items: center; }
+.shot .connection { display: flex; align-items: center; gap: 7px; padding: 8px 14px; color: var(--rs-muted); border-block: 1px solid var(--rs-border); font-size: 12px; }
+.shot .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--vscode-testing-iconQueued); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-testing-iconQueued) 16%, transparent); }
+.shot .needsReview .dot { background: var(--vscode-editorWarning-foreground); box-shadow: 0 0 0 3px color-mix(in srgb, var(--vscode-editorWarning-foreground) 16%, transparent); }
+.shot .tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--rs-border); }
+.shot .tabs span { border: 0; border-bottom: 2px solid transparent; padding: 7px 8px 9px; color: var(--rs-muted); font-size: 12px; white-space: nowrap; }
+.shot .tabs .active { color: var(--vscode-foreground); border-bottom-color: var(--rs-olive); }
+.shot .content { display: grid; gap: 12px; padding: 15px 14px 20px; }
+.shot .overview { gap: 14px; }
+.shot .pageHeader { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+.shot .pageHeader > div { min-width: 0; display: grid; gap: 4px; }
+.shot .pageHeader h2 { font-size: 19px; letter-spacing: -0.03em; line-height: 1.15; }
+.shot .pageHeader p { color: var(--rs-muted); font-size: 12px; }
+.shot .pageHeader.hero { align-items: flex-end; padding: 16px; border: 1px solid var(--rs-border); border-radius: 11px; background: radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--rs-olive) 16%, transparent), transparent 45%), var(--rs-surface); }
+.shot .pageHeader.hasAction > .softButton, .shot .pageHeader.hasAction > .primary { flex: 0 0 auto; white-space: nowrap; }
+.shot .metricGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.shot .metric { padding: 11px; border: 1px solid var(--rs-border); border-radius: 8px; background: var(--rs-surface); }
+.shot .metric strong, .shot .metric span { display: block; }
+.shot .metric strong { font-size: 19px; letter-spacing: -0.04em; }
+.shot .metric span { margin-top: 1px; color: var(--rs-muted); font-size: 11px; }
+.shot .metric.blue strong { color: var(--rs-olive); }
+.shot .metric.amber strong { color: var(--vscode-editorWarning-foreground); }
+.shot .metric.red strong { color: var(--vscode-errorForeground); }
+.shot .proposalCard { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; padding: 12px; border: 1px solid color-mix(in srgb, var(--vscode-testing-iconPassed) 37%, var(--rs-border)); border-radius: 9px; background: color-mix(in srgb, var(--vscode-testing-iconPassed) 7%, transparent); }
+.shot .proposalIcon { display: grid; place-content: center; width: 30px; height: 30px; border-radius: 8px; background: color-mix(in srgb, var(--vscode-testing-iconPassed) 18%, transparent); color: var(--vscode-testing-iconPassed); }
+.shot .proposalCard div:nth-child(2) { display: grid; min-width: 0; }
+.shot .proposalCard span { color: var(--rs-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.shot .nextAction { display: grid; gap: 2px; padding: 2px 3px; }
+.shot .nextAction span { color: var(--rs-muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.shot .nextAction strong { font-size: 13px; }
+.shot .search { width: 100%; display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 10px; border: 1px solid var(--rs-border); border-radius: 8px; background: var(--vscode-input-background); color: var(--rs-muted); }
+.shot .searchIcon { width: 14px; height: 14px; }
+.shot details { margin: 0; border: 1px solid var(--rs-border); border-radius: 8px; background: var(--rs-surface); overflow: hidden; }
+.shot summary { display: flex; justify-content: space-between; padding: 9px 10px; list-style: none; font-weight: 650; }
+.shot summary::-webkit-details-marker { display: none; }
+.shot summary b { color: var(--rs-muted); font-size: 11px; font-weight: 500; }
+.shot .fileList { border-top: 1px solid var(--rs-border); }
+.shot .fileRow + .fileRow { border-top: 1px solid var(--rs-border); }
+.shot .fileMain { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 7px; align-items: center; padding: 9px 10px; }
+.shot .fileGlyph { width: 18px; color: var(--rs-olive); text-align: center; }
+.shot .fileCopy { min-width: 0; display: grid; }
+.shot .fileCopy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shot .fileCopy small { color: var(--rs-muted); font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shot .badge { border-radius: 99px; padding: 2px 6px; color: var(--vscode-badge-foreground); background: var(--vscode-badge-background); font-size: 10px; white-space: nowrap; }
+.shot .badge.local { color: oklch(0.198 0.041 80.17); /* #1F1300 */ background: var(--vscode-editorWarning-foreground); }
+.shot .badge.incoming { color: oklch(1 0 0); /* #FFFFFF */ background: oklch(0.588 0.139 241.97); /* #0284C7 */ }
+.shot .changeGroup { display: grid; gap: 6px; }
+.shot .changeGroup h3 { margin: 0; color: var(--rs-muted); font-size: 10px; letter-spacing: 0.09em; text-transform: uppercase; }
+.shot .changeGroup h3 span { float: right; }
+.shot .change { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 9px 10px; border: 1px solid var(--rs-border); border-radius: 7px; background: var(--rs-surface); }
+.shot .change strong, .shot .change small { display: block; }
+.shot .change small { color: var(--rs-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
+.shot .change .btnish { padding: 3px 6px; font-size: 11px; }
+.shot .publishPanel { display: grid; gap: 8px; padding: 12px; border: 1px solid var(--rs-border); border-radius: 9px; background: var(--rs-surface); }
+.shot .publishPanel label { display: grid; gap: 4px; color: var(--rs-muted); font-size: 11px; }
+.shot .publishPanel .fakeInput { padding: 8px 9px; border: 1px solid var(--rs-border); border-radius: 6px; color: var(--vscode-input-foreground); background: var(--vscode-input-background); }
+.shot .publishPanel small { color: var(--rs-muted); font-size: 11px; }
+.shot .settingCard { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--rs-border); border-radius: 8px; background: var(--rs-surface); }
+.shot .settingCard > span { color: var(--rs-muted); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+.shot .settingCard small { color: var(--rs-muted); }
+.shot .choiceRow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.shot .choice { border-radius: 99px; padding: 4px 9px; font-size: 11px; }
+.shot .choice.active { background: color-mix(in srgb, var(--rs-olive) 16%, transparent); border-color: color-mix(in srgb, var(--rs-olive) 55%, transparent); }
+.shot .tick { display: grid; grid-template-columns: 14px 1fr; align-items: center; gap: 8px; font-size: 12px; }
+.shot .tick i { width: 14px; height: 14px; border-radius: 3px; border: 1px solid color-mix(in srgb, var(--rs-olive) 50%, transparent); background: color-mix(in srgb, var(--rs-olive) 22%, transparent); }
+.shot .tick i.on { background: var(--rs-olive); }

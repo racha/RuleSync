@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8">
+		<meta name="viewport" content="width=device-width, initial-scale=1">
+		<title>RuleSync — review and share Cursor rules from GitHub</title>
+		<meta name="description" content="A Cursor extension that syncs .cursor rules, hooks, and skills with a GitHub repository. Review incoming updates. Propose local changes. Never writes main.">
+		<meta name="theme-color" content="#1A1C16">
+		<meta property="og:title" content="RuleSync">
+		<meta property="og:description" content="Review and share Cursor rules from GitHub.">
+		<meta property="og:type" content="website">
+		<meta property="og:url" content="https://racha.github.io/RuleSync/">
+		<meta property="og:image" content="https://racha.github.io/RuleSync/icon.png">
+		<meta name="twitter:card" content="summary">
+		<link rel="icon" href="./logo.svg" type="image/svg+xml">
+		<link rel="preconnect" href="https://fonts.googleapis.com">
+		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+		<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@1,6..72,500&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+		<link rel="stylesheet" href="./styles.css">
+		<link rel="stylesheet" href="./dashboard.css">
+	</head>
+	<body>
+		<div class="blob" aria-hidden="true"><i></i></div>
+
+		<header class="nav">
+			<div class="wrap navInner">
+				<a class="brand" href="./">
+					<img src="./logo.svg" alt="">
+					RuleSync
+				</a>
+
+				<nav class="navLinks">
+					<a href="#how">How it works</a>
+					<a href="https://open-vsx.org/extension/INVEON-Development/rulesync">Open VSX</a>
+					<a href="https://github.com/racha/RuleSync">GitHub</a>
+				</nav>
+			</div>
+		</header>
+
+		<div class="page">
+			<div class="wrap">
+				<section class="hero">
+					<img class="heroMark" src="./logo.svg" alt="">
+					<p class="eyebrow">CURSOR EXTENSION</p>
+					<h1>Share Cursor rules the way you share code.</h1>
+					<p>RuleSync keeps <code>.cursor</code> rules, hooks, skills, and MCP config in a GitHub repository. Incoming updates are reviewed before they touch the workspace. Local edits become a proposal branch — never a write to main.</p>
+					<div class="actions">
+						<a class="btn" href="https://open-vsx.org/extension/INVEON-Development/rulesync">Get the extension</a>
+						<a class="btn ghost" href="https://github.com/racha/RuleSync">View the repository</a>
+					</div>
+				</section>
+
+				<div class="states">
+					<div class="state"><b>Incoming</b><span>Remote changed. Diff it, then apply.</span></div>
+					<div class="state"><b>Local</b><span>You changed it. Publish a proposal branch.</span></div>
+					<div class="state"><b>Conflict</b><span>Both sides moved. Resolve before sync.</span></div>
+				</div>
+
+			<div class="shots" aria-hidden="true" inert>
+				<figure class="shotFrame">
+					<div class="shot">
+						<header class="appHeader">
+							<div class="brand">
+								<svg class="brandMark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.75a9.25 9.25 0 1 0 0 18.5 9.25 9.25 0 0 0 0-18.5Z"/><path d="M7 9.1h8.2l-1.9-1.9M17 14.9H8.8l1.9 1.9"/><path d="M15.2 9.1 17 10.9M8.8 14.9 7 13.1"/></svg>
+								<div>
+									<span>RULESYNC</span>
+									<strong>acme-app</strong>
+									<small>acme/cursor-rules</small>
+								</div>
+							</div>
+							<span class="iconButton">↻</span>
+						</header>
+						<div class="connection needsReview"><span class="dot"></span><span>5 files need review.</span></div>
+						<nav class="tabs">
+							<span class="active">Overview</span>
+							<span>Library</span>
+							<span>Changes · 5</span>
+							<span>Settings</span>
+						</nav>
+						<section class="content overview">
+							<header class="pageHeader hero hasAction">
+								<div>
+									<span class="eyebrow">PROJECT STATUS</span>
+									<h2>Rules need your attention</h2>
+									<p>Review the changes before they affect the project.</p>
+								</div>
+								<span class="softButton">Review changes →</span>
+							</header>
+							<div class="metricGrid">
+								<div class="metric"><strong>11</strong><span>Managed files</span></div>
+								<div class="metric blue"><strong>2</strong><span>Incoming</span></div>
+								<div class="metric amber"><strong>3</strong><span>Local changes</span></div>
+								<div class="metric red"><strong>0</strong><span>Conflicts</span></div>
+							</div>
+							<div class="proposalCard">
+								<div class="proposalIcon">↗</div>
+								<div>
+									<strong>Proposal branch ready</strong>
+									<span>rulesync/stefan/20260831-1412</span>
+								</div>
+								<span class="secondary">Create PR</span>
+							</div>
+							<div class="nextAction">
+								<span>Next best action</span>
+								<strong>Review remote updates</strong>
+							</div>
+						</section>
+					</div>
+					<figcaption>Overview</figcaption>
+				</figure>
+
+				<figure class="shotFrame">
+					<div class="shot">
+						<header class="appHeader">
+							<div class="brand">
+								<svg class="brandMark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.75a9.25 9.25 0 1 0 0 18.5 9.25 9.25 0 0 0 0-18.5Z"/><path d="M7 9.1h8.2l-1.9-1.9M17 14.9H8.8l1.9 1.9"/><path d="M15.2 9.1 17 10.9M8.8 14.9 7 13.1"/></svg>
+								<div>
+									<span>RULESYNC</span>
+									<strong>acme-app</strong>
+									<small>acme/cursor-rules</small>
+								</div>
+							</div>
+							<span class="iconButton">↻</span>
+						</header>
+						<div class="connection needsReview"><span class="dot"></span><span>5 files need review.</span></div>
+						<nav class="tabs">
+							<span>Overview</span>
+							<span class="active">Library</span>
+							<span>Changes · 5</span>
+							<span>Settings</span>
+						</nav>
+						<section class="content">
+							<header class="pageHeader hasAction">
+								<div>
+									<span class="eyebrow">MANAGED CONTENT</span>
+									<h2>Rules library</h2>
+								</div>
+								<span class="primary">＋ New</span>
+							</header>
+							<label class="search">
+								<svg class="searchIcon" viewBox="0 0 16 16"><circle cx="6.5" cy="6.5" r="4.25" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M9.6 9.6 13.2 13.2" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+								Search rules and configuration
+							</label>
+							<details open>
+								<summary><span>Rules</span><b>3</b></summary>
+								<div class="fileList">
+									<div class="fileRow"><div class="fileMain"><span class="fileGlyph">✦</span><span class="fileCopy"><strong>Always use project conventions</strong><small>.cursor/rules/conventions.mdc</small></span><span class="badge">Synced</span></div></div>
+									<div class="fileRow"><div class="fileMain"><span class="fileGlyph">✦</span><span class="fileCopy"><strong>Prefer TypeScript strict mode</strong><small>.cursor/rules/typescript.mdc</small></span><span class="badge incoming">Incoming</span></div></div>
+									<div class="fileRow"><div class="fileMain"><span class="fileGlyph">✦</span><span class="fileCopy"><strong>Write tests with the change</strong><small>.cursor/rules/testing.mdc</small></span><span class="badge local">Local</span></div></div>
+								</div>
+							</details>
+							<details open>
+								<summary><span>Hooks</span><b>1</b></summary>
+								<div class="fileList">
+									<div class="fileRow"><div class="fileMain"><span class="fileGlyph">⌁</span><span class="fileCopy"><strong>Review secrets before apply</strong><small>.cursor/hooks/pre-apply.json</small></span><span class="badge incoming">Incoming</span></div></div>
+								</div>
+							</details>
+							<details open>
+								<summary><span>Skills</span><b>1</b></summary>
+								<div class="fileList">
+									<div class="fileRow"><div class="fileMain"><span class="fileGlyph">◇</span><span class="fileCopy"><strong>Scaffold a React component</strong><small>.cursor/skills/react-component/SKILL.md</small></span><span class="badge local">Local</span></div></div>
+								</div>
+							</details>
+						</section>
+					</div>
+					<figcaption>Rules library</figcaption>
+				</figure>
+
+				<figure class="shotFrame">
+					<div class="shot">
+						<header class="appHeader">
+							<div class="brand">
+								<svg class="brandMark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.75a9.25 9.25 0 1 0 0 18.5 9.25 9.25 0 0 0 0-18.5Z"/><path d="M7 9.1h8.2l-1.9-1.9M17 14.9H8.8l1.9 1.9"/><path d="M15.2 9.1 17 10.9M8.8 14.9 7 13.1"/></svg>
+								<div>
+									<span>RULESYNC</span>
+									<strong>acme-app</strong>
+									<small>acme/cursor-rules</small>
+								</div>
+							</div>
+							<span class="iconButton">↻</span>
+						</header>
+						<div class="connection needsReview"><span class="dot"></span><span>5 files need review.</span></div>
+						<nav class="tabs">
+							<span>Overview</span>
+							<span>Library</span>
+							<span class="active">Changes · 5</span>
+							<span>Settings</span>
+						</nav>
+						<section class="content">
+							<header class="pageHeader">
+								<div>
+									<span class="eyebrow">REVIEW QUEUE</span>
+									<h2>Review remote updates</h2>
+									<p>Open a native diff for every file before applying or publishing changes.</p>
+								</div>
+							</header>
+							<div class="changeGroup">
+								<h3>Incoming from GitHub<span>2</span></h3>
+								<div class="change">
+									<div><strong>Prefer TypeScript strict mode</strong><small>.cursor/rules/typescript.mdc</small></div>
+									<span class="btnish">Pull</span>
+								</div>
+								<div class="change">
+									<div><strong>Review secrets before apply</strong><small>.cursor/hooks/pre-apply.json</small></div>
+									<span class="btnish">Pull</span>
+								</div>
+							</div>
+							<span class="primary wide">Apply 2 remote changes</span>
+						</section>
+					</div>
+					<figcaption>Changes</figcaption>
+				</figure>
+			</div>
+
+				<section id="why">
+					<p class="eyebrow">WHY</p>
+					<h2>Team rules, versioned and reviewable.</h2>
+					<p class="lead">Platform teams already keep coding standards in git. RuleSync does the same for AI-editor guidance — without dumping gitignored <code>.cursor</code> files onto main.</p>
+					<div class="grid">
+						<article class="card">
+							<strong>Three-way sync</strong>
+							<p>Every file is compared against the last accepted baseline, your workspace, and GitHub. You see incoming, local, and conflict — not a silent overwrite.</p>
+						</article>
+						<article class="card">
+							<strong>Native diffs</strong>
+							<p>Review happens in Cursor’s own diff tabs. Apply one file or all incoming updates after you have looked at them.</p>
+						</article>
+						<article class="card">
+							<strong>Proposal branches</strong>
+							<p>Local edits publish to <code>rulesync/…</code> and open GitHub Compare. Main stays untouched. You create the pull request.</p>
+						</article>
+						<article class="card">
+							<strong>Risk prompts</strong>
+							<p>Hooks, MCP, secrets-looking content, binaries, and large files ask for confirmation before apply or publish.</p>
+						</article>
+					</div>
+				</section>
+
+				<section id="how">
+					<p class="eyebrow">SETUP</p>
+					<h2>Four steps, then the library.</h2>
+					<div class="steps">
+						<div class="step">
+							<span class="num">1</span>
+							<div>
+								<h3>Activate the workspace</h3>
+								<p>Open the RuleSync icon in the Activity Bar and turn the extension on for this folder.</p>
+							</div>
+						</div>
+						<div class="step">
+							<span class="num">2</span>
+							<div>
+								<h3>Connect GitHub</h3>
+								<p>Sign in with the RuleSync GitHub App via device code. Install the app on the rules repository only.</p>
+							</div>
+						</div>
+						<div class="step">
+							<span class="num">3</span>
+							<div>
+								<h3>Pick the rules repo</h3>
+								<p>Choose owner/repo and branch. Private repositories work. One source per workspace in this release.</p>
+							</div>
+						</div>
+						<div class="step">
+							<span class="num">4</span>
+							<div>
+								<h3>Merge the generated manifest</h3>
+								<p>RuleSync writes <code>rulesync.yml</code> for you and opens a pull request. Merge it once. You do not edit or maintain that file.</p>
+							</div>
+						</div>
+					</div>
+				</section>
+
+				<section id="manifest">
+					<div class="split">
+						<div>
+							<p class="eyebrow">MANIFEST</p>
+							<h2>Generated for you. Not something you maintain.</h2>
+							<p class="lead">If the rules repo has no <code>rulesync.yml</code>, RuleSync creates the Cursor starter, publishes it on a proposal branch, and opens the pull request. After you merge that PR, RuleSync reads the file on its own. You keep working in <code>.cursor</code> — not in YAML.</p>
+						</div>
+						<pre><code>version: 1
+
+profiles:
+  cursor-project:
+    adapter: cursor
+    scope: project
+    source: .cursor
+    mode: mirror</code></pre>
+					</div>
+				</section>
+
+				<section id="trust">
+					<p class="eyebrow">TRUST</p>
+					<h2>Narrow access. Explicit writes.</h2>
+					<div class="checks">
+						<div class="check">
+							<i></i>
+							<p>Tokens live in Cursor secret storage — never in workspace settings or the repo.<span>The GitHub App asks for Contents, Metadata, and Pull requests on the rules repository you install it on.</span></p>
+						</div>
+						<div class="check">
+							<i></i>
+							<p>Main is not a write target.<span>RuleSync re-checks the base SHA before publishing a proposal branch.</span></p>
+						</div>
+						<div class="check">
+							<i></i>
+							<p>Untrusted workspaces stay read-only.<span>Filesystem writes and publish require a trusted folder.</span></p>
+						</div>
+					</div>
+				</section>
+
+				<footer class="footer">
+					<a href="https://github.com/racha/RuleSync">github.com/racha/RuleSync</a>
+					<span>Cursor extension</span>
+				</footer>
+			</div>
+		</div>
+	</body>
+</html>

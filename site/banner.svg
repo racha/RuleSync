@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="520" viewBox="0 0 1280 520" role="img" aria-label="RuleSync">
+  <rect width="1280" height="520" fill="#1A1C16"/>
+  <g transform="translate(536 64) scale(8.666667)" fill="none" stroke="#A3B86C" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M12 2.75a9.25 9.25 0 1 0 0 18.5 9.25 9.25 0 0 0 0-18.5Z"/>
+    <path d="M7 9.1h8.2l-1.9-1.9M17 14.9H8.8l1.9 1.9"/>
+    <path d="M15.2 9.1 17 10.9M8.8 14.9 7 13.1"/>
+  </g>
+  <text x="640" y="360" text-anchor="middle" fill="#F4F6EB" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="64" font-weight="650" letter-spacing="-1.6">RuleSync</text>
+  <text x="640" y="412" text-anchor="middle" fill="#A3B86C" font-family="ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif" font-size="22" font-weight="500">Review and share Cursor rules from GitHub.</text>
+</svg>
