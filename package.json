@@ -1,0 +1,106 @@
+{
+  "name": "rulesync",
+  "displayName": "RuleSync",
+  "description": "Review and share Cursor rules from GitHub. Incoming updates stay reviewed. Local edits become a proposal branch.",
+  "version": "1.0.0",
+  "publisher": "INVEON-Development",
+  "license": "MIT",
+  "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#1A1C16",
+    "theme": "dark"
+  },
+  "keywords": ["cursor", "rules", "github", "sync", ".cursor", "hooks", "skills", "mcp"],
+  "homepage": "https://racha.github.io/RuleSync/",
+  "bugs": {
+    "url": "https://github.com/racha/RuleSync/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/racha/RuleSync.git"
+  },
+  "private": true,
+  "type": "module",
+  "main": "./dist/extension.cjs",
+  "engines": { "vscode": "^1.96.0" },
+  "categories": ["Other", "SCM Providers"],
+  "activationEvents": [
+    "onView:rulesync.dashboard",
+    "onCommand:rulesync.openDashboard",
+    "onCommand:rulesync.refresh",
+    "onCommand:rulesync.connect"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        { "id": "rulesync", "title": "RuleSync", "icon": "resources/rulesync.svg" }
+      ]
+    },
+    "views": {
+      "rulesync": [
+        { "id": "rulesync.dashboard", "name": "Dashboard", "type": "webview" }
+      ]
+    },
+    "commands": [
+      { "command": "rulesync.openDashboard", "title": "RuleSync: Open Dashboard" },
+      { "command": "rulesync.connect", "title": "RuleSync: Connect Rules Repository" },
+      { "command": "rulesync.refresh", "title": "RuleSync: Check for Updates" }
+    ],
+    "configuration": {
+      "title": "RuleSync",
+      "properties": {
+        "rulesync.sources": {
+          "type": "array",
+          "default": [],
+          "maxItems": 1,
+          "description": "The connected RuleSync source. Configure this through the RuleSync dashboard.",
+          "items": {
+            "type": "object",
+            "required": ["id", "provider", "repository", "profile"],
+            "properties": {
+              "id": { "type": "string" },
+              "provider": { "type": "string", "enum": ["github"] },
+              "repository": { "type": "string" },
+              "ref": { "type": "string" },
+              "profile": { "type": "string" },
+              "enabled": { "type": "boolean" }
+            }
+          }
+        },
+        "rulesync.projectInitialized": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether RuleSync has been activated for this workspace. Configure this through the RuleSync dashboard."
+        },
+        "rulesync.optOut": {
+          "type": "array",
+          "default": [],
+          "description": "Managed destination paths to leave untouched.",
+          "items": { "type": "object", "required": ["source", "paths"], "properties": { "source": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } } } }
+        },
+        "rulesync.updateCheck.mode": { "type": "string", "enum": ["off", "timed", "events", "both"], "default": "both", "description": "When RuleSync checks GitHub for rule updates." },
+        "rulesync.updateCheck.interval": { "type": "string", "enum": ["hourly", "daily", "weekly"], "default": "daily", "description": "How often a scheduled check runs." },
+        "rulesync.updateCheck.onStart": { "type": "boolean", "default": true, "description": "Check GitHub when the editor opens this workspace." },
+        "rulesync.updateCheck.onFocus": { "type": "boolean", "default": false, "description": "Check GitHub when the editor window is focused again." },
+        "rulesync.updateCheck.onDashboardOpen": { "type": "boolean", "default": true, "description": "Check GitHub when the RuleSync sidebar is opened." },
+        "rulesync.checkIntervalMinutes": { "type": "number", "default": 15, "minimum": 5, "maximum": 1440, "description": "Deprecated. Use RuleSync settings to choose hourly, daily, or weekly checks." },
+        "rulesync.githubAppClientId": { "type": "string", "default": "Iv23li1SFwqQ6d45EmWN", "markdownDescription": "Override the bundled RuleSync GitHub App client ID. Leave empty to use the official app." }
+      }
+    }
+  },
+  "scripts": {
+    "build": "vite build && node ./esbuild.mjs",
+    "watch": "vite build --watch & node ./esbuild.mjs --watch",
+    "package": "pnpm build && vsce package --no-dependencies",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@rulesync/adapters": "workspace:*",
+    "@rulesync/core": "workspace:*",
+    "@rulesync/provider-github": "workspace:*",
+    "chokidar": "^4.0.3",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.1"
+  }
+}

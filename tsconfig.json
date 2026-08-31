@@ -1,0 +1,18 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "src",
+    "outDir": "dist-types",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM"],
+    "types": ["node", "vscode"]
+  },
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/adapters" },
+    { "path": "../../packages/provider-github" }
+  ],
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}
+
