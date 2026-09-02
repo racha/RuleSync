@@ -1,48 +1,60 @@
-import path from "node:path";
 import * as vscode from "vscode";
-import chokidar, { type FSWatcher } from "chokidar";
-import { createCursorContent, classifyCursorPath, parseManifest, profileByName } from "@rulesync/adapters";
-import { GitHubProvider, githubUserMessage, isUnauthorized, pollDeviceToken, refreshUserAccessToken, requestDeviceCode } from "@rulesync/provider-github";
-import { acceptRisks, changeKey, defaultUpdateCheck, formatFileAuthorship, isUpdateCheckDue, managedRenamePath, planSync, remoteUpdateMessage, scanRisks, shouldKeepProposal, shouldRunUpdateCheck, unseenKeys, updateCheckIntervalMs, type AvailableRepository, type Change, type DashboardItem, type DashboardState, type FileEntry, type SourceSpec, type SyncPlan, type SyncState, type UpdateCheckSettings, type UpdateCheckTrigger } from "@rulesync/core";
+import { GitLabProvider } from "@rulesync/provider-gitlab";
+import { GitHubProvider, pollDeviceToken, refreshUserAccessToken, requestDeviceCode } from "@rulesync/provider-github";
+import { canonicalGitlabBaseUrl, configuredSource, defaultUpdateCheck, gitlabPatSecretKey, isGitlabHostApproved, isUnauthorized, providerUserMessage, type AvailableRepository, type DashboardFolder, type DashboardState, type LegacyWorkspaceSource, type ProviderId, type RulesProvider, type UpdateCheckSettings, type UpdateCheckTrigger } from "@rulesync/core";
 
-import type { DashboardCommand } from "./protocol.js";
 import { VirtualDocumentStore } from "./virtualDocuments.js";
-import { hash, listFiles, removeFile, renameFile, workspacePath, writeFile } from "./filesystem.js";
+import { commandGitlabHost, commandProvider, type DashboardCommand } from "./protocol.js";
+import { FolderSession, type FolderSessionDeps, type FolderSessionHost } from "./folderSession.js";
+import { assignLegacyWorkspaceSetup, discardLegacyWorkspaceSetup, eligibleFolders, folderGitlabBaseUrlKey, folderUri, hasLegacyWorkspaceSetup, inspectWorkspaceSources, isMultiRoot, migrateSingleFolderState, readLegacyAssignment, selectedFolderKey } from "./folderConfig.js";
 
-const stateKey = "rulesync.syncState.v1";
 const tokenKey = "rulesync.github.accessToken";
 const refreshTokenKey = "rulesync.github.refreshToken";
+const gitlabApprovedHostsKey = "rulesync.gitlab.approvedHosts.v1";
 const bundledGithubAppClientId = "Iv23li1SFwqQ6d45EmWN";
 const githubAppInstallUrl = "https://github.com/apps/rulesync/installations/select_target";
+const gitlabPatHelpUrl = "https://docs.gitlab.com/user/profile/personal_access_tokens/";
+const untrustedAllowed = new Set(["ready", "source.disconnect", "auth.forget", "gitlab.pat.forget", "settings.updateCheck", "proposal.openCompare", "folder.select"]);
+const sessionCommands = new Set(["workspace.initialize", "manifest.initialize", "source.save", "source.disconnect", "sync.refresh", "content.open", "content.diff", "content.create", "content.disable", "content.enable", "content.rename", "content.delete", "content.revert", "conflict.resolve", "remote.apply", "remote.applyAll", "remote.restore", "risks.accept", "risk.accept", "proposal.publish", "proposal.openCompare"]);
 
-type RemoteSnapshot = { commit: string; entries: FileEntry[] };
+export interface ControllerDeps extends FolderSessionDeps {
+  createGithub?: (token: string, signal?: AbortSignal) => RulesProvider;
+  createGitlab?: (input: { token: string; baseUrl: string; signal?: AbortSignal }) => RulesProvider;
+  requestDeviceCode?: typeof requestDeviceCode;
+  pollDeviceToken?: typeof pollDeviceToken;
+  refreshUserAccessToken?: typeof refreshUserAccessToken;
+}
+
+function gitlabPatCreateUrl(baseUrl?: string): string {
+  try {
+    const host = canonicalGitlabBaseUrl(baseUrl);
+    if (host === "https://gitlab.example.com") return gitlabPatHelpUrl;
+    return `${host}/-/user_settings/personal_access_tokens?name=RuleSync&scopes=api`;
+  } catch {
+    return gitlabPatHelpUrl;
+  }
+}
 
 export class RuleSyncController implements vscode.Disposable {
   readonly #changed = new vscode.EventEmitter<DashboardState>();
   readonly #virtualDocuments = new VirtualDocumentStore();
-  #watcher: FSWatcher | undefined;
+  readonly #deps: ControllerDeps;
+  readonly #sessions = new Map<string, FolderSession>();
+  #selectedUri: string | undefined;
   #timer: NodeJS.Timeout | undefined;
-  #refreshing = false;
-  #remote: RemoteSnapshot | undefined;
-  #local: FileEntry[] = [];
-  #plan: SyncPlan | undefined;
-  #status: DashboardState["status"] = "unconfigured";
-  #statusMessage = "Connect a rules repository to begin.";
-  #lastCheckedAt: string | undefined;
   #githubConnected = false;
-  #manifestStatus: DashboardState["manifestStatus"] = "notChecked";
-  #manifestMessage: string | undefined;
+  #gitlabConnected = false;
+  #repositoriesGeneration = 0;
   #availableRepositories: AvailableRepository[] = [];
   #repositoriesStatus: DashboardState["repositoriesStatus"] = "idle";
+  #repositoriesProvider: ProviderId | undefined;
+  #repositoriesHost: string | undefined;
   #repositoriesMessage: string | undefined;
   #repositoriesLoading = false;
   #reloadReposOnFocus = false;
-  #offeredEmptyMain = false;
-  #creatingEmptyMain = false;
-  #authorship = new Map<string, { createdBy: string; lastEditedBy: string }>();
-  #authorshipGeneration = 0;
 
-  constructor(readonly context: vscode.ExtensionContext) {
+  constructor(readonly context: vscode.ExtensionContext, deps: ControllerDeps = {}) {
+    this.#deps = deps;
     context.subscriptions.push(this.#changed, this.#virtualDocuments);
     context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider("rulesync-remote", this.#virtualDocuments));
     context.subscriptions.push(vscode.workspace.registerTextDocumentContentProvider("rulesync-base", this.#virtualDocuments));
@@ -50,214 +62,318 @@ export class RuleSyncController implements vscode.Disposable {
       if (event.affectsConfiguration("rulesync.updateCheck")) {
         this.startPolling();
         this.publish();
-        if (!event.affectsConfiguration("rulesync.sources") && !event.affectsConfiguration("rulesync.projectInitialized")) return;
       }
-      if (event.affectsConfiguration("rulesync")) void this.initialize();
+      for (const session of this.#sessions.values()) {
+        if (event.affectsConfiguration("rulesync.sources", session.folder.uri) || event.affectsConfiguration("rulesync.projectInitialized", session.folder.uri) || event.affectsConfiguration("rulesync.optOut", session.folder.uri)) void session.initialize();
+      }
     }));
+    context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders((event) => void this.onWorkspaceFoldersChanged(event)));
     context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
       if (state.focused) {
-        void this.maybeRefresh("focus");
-        if (this.#reloadReposOnFocus && this.#githubConnected && !this.source()) {
+        void this.refreshConfigured("focus");
+        if (this.#reloadReposOnFocus && this.#githubConnected && this.selectedProvider() === "github" && !this.selected()?.source()) {
           this.#reloadReposOnFocus = false;
-          void this.loadAccessibleRepositories();
+          void this.loadAccessibleRepositories("github");
         }
       }
     }));
+    context.subscriptions.push(vscode.workspace.onDidGrantWorkspaceTrust(() => void this.initialize()));
   }
 
   get onDidChange() { return this.#changed.event; }
 
   async initialize(): Promise<void> {
-    this.#watcher?.close();
-    this.#watcher = undefined;
-    if (!this.workspaceRoot()) {
-      this.#status = "error";
-      this.#statusMessage = "RuleSync supports one folder workspace at a time.";
-      this.publish();
-      return;
-    }
-    try {
-      await this.loadLocal();
-    } catch (error) {
-      this.#local = [];
-      this.fail(error);
-      return;
-    }
-    this.startWatching();
+    await this.reconcileFolders();
     this.startPolling();
-    this.#lastCheckedAt = this.state().lastCheckedAt ?? this.#lastCheckedAt;
-    this.#githubConnected = Boolean(await this.token());
-    if (this.source()) {
-      this.#status = "checking";
-      this.#statusMessage = "Ready to check the configured source.";
-      this.publish();
-      if (await this.token()) await this.maybeRefresh("start"); else {
-        this.#status = "needsReview";
-        this.#statusMessage = "Sign in to GitHub to check remote rules.";
-        this.rebuildPlan();
-      }
-    } else {
-      this.#status = "unconfigured";
-      this.#statusMessage = this.projectInitialized() ? "Connect a shared rules repository." : "Initialize RuleSync for this workspace.";
-      this.#manifestStatus = "notChecked";
-      this.#manifestMessage = undefined;
-      this.rebuildPlan();
-      if (this.#githubConnected) void this.loadAccessibleRepositories();
-    }
+    await this.syncAuthFlags();
+    this.publish();
   }
 
   dispose(): void {
-    this.#watcher?.close();
+    for (const session of this.#sessions.values()) session.dispose();
+    this.#sessions.clear();
     if (this.#timer) clearInterval(this.#timer);
+  }
+
+  async refresh(): Promise<void> {
+    await this.selected()?.refresh();
   }
 
   async handle(command: DashboardCommand): Promise<void> {
     try {
+      if (!this.trusted() && !untrustedAllowed.has(command.type)) this.assertTrusted();
       await this.dispatch(command);
     } catch (error) {
+      const provider = commandProvider(command) ?? this.selectedProvider();
       if (isUnauthorized(error)) {
-        const token = await this.refreshAccessToken();
-        if (token) { await this.dispatch(command); return; }
-        await this.forgetGithubSession();
-        throw new Error("GitHub sign-in expired. Connect GitHub again.");
+        if (provider === "github") {
+          const token = await this.refreshAccessToken();
+          if (token) { await this.dispatch(command); return; }
+          await this.forgetGithubSession();
+          throw new Error("GitHub sign-in expired. Connect GitHub again.");
+        }
+        await this.forgetGitlabSession(commandGitlabHost(command) ?? this.selected()?.gitlabBaseUrl);
+        throw new Error("GitLab token expired or was revoked. Paste a new personal access token.");
       }
-      throw error instanceof Error ? new Error(githubUserMessage(error)) : error;
+      throw error instanceof Error ? new Error(providerUserMessage(provider, error)) : error;
     }
   }
 
   private async dispatch(command: DashboardCommand): Promise<void> {
     switch (command.type) {
-      case "ready": this.publish(); void this.maybeRefresh("dashboard"); return;
+      case "ready": this.publish(); void this.selected()?.maybeRefresh("dashboard"); return;
       case "auth.start": await this.authenticate(); return;
+      case "auth.forget": await this.forgetGithubSession(); return;
       case "github.app.create":
       case "github.app.install":
         this.#reloadReposOnFocus = true;
         await vscode.env.openExternal(vscode.Uri.parse(githubAppInstallUrl));
         return;
       case "github.app.help": await vscode.env.openExternal(vscode.Uri.parse("https://docs.github.com/en/apps/creating-github-apps/registering-a-github-app/registering-a-github-app")); return;
-      case "workspace.initialize": await this.initializeWorkspace(); return;
-      case "manifest.initialize": await this.initializeManifest(); return;
-      case "github.clientId.save": await this.saveClientId(command.clientId); return;
-      case "source.save": await this.saveSource(command.source); return;
-      case "github.repos.refresh": await this.loadAccessibleRepositories(); return;
-      case "sync.refresh": await this.maybeRefresh("manual"); return;
+      case "github.repos.refresh": await this.loadAccessibleRepositories("github"); return;
+      case "gitlab.host.approve": await this.approveGitlabHost(command.baseUrl); return;
+      case "gitlab.pat.save": await this.saveGitlabToken(command.baseUrl, command.token); return;
+      case "gitlab.pat.forget": await this.forgetGitlabSession(command.baseUrl); this.publish(); return;
+      case "gitlab.pat.help": await this.openGitlabPatHelp(command.baseUrl); return;
+      case "gitlab.repos.refresh": await this.loadAccessibleRepositories("gitlab"); return;
       case "settings.updateCheck": await this.saveUpdateCheck(command.settings); return;
-      case "content.open": await this.open(command.path); return;
-      case "content.diff": await this.diff(command.path, command.comparison); return;
-      case "content.create": await this.create(command.request); return;
-      case "content.rename": await this.rename(command.path); return;
-      case "content.delete": await this.delete(command.path); return;
-      case "content.revert": await this.revert(command.path); return;
-      case "conflict.resolve": await this.resolve(command.path, command.resolution); return;
-      case "remote.apply": await this.applyOne(command.path); return;
-      case "remote.applyAll": await this.applyAll(); return;
-      case "risks.accept": await this.acceptVisibleRisks(); return;
-      case "proposal.publish": await this.publishProposal(command.message); return;
-      case "proposal.openCompare": await this.openCompare(); return;
-      case "settings.open": await vscode.commands.executeCommand("workbench.action.openSettings", "@ext:rulesync.rulesync"); return;
-      case "source.disconnect": await this.disconnect(); return;
+      case "folder.select": await this.selectFolder(command.folderUri); return;
+      case "workspace.source.assign": await this.assignLegacySource(command.folderUri); return;
+      case "workspace.source.discard": await this.discardLegacySource(); return;
+      default: break;
     }
+    if (!sessionCommands.has(command.type)) return;
+    const session = this.selected();
+    if (!session) throw new Error("Open a local folder to use RuleSync.");
+    await session.handle(command);
+  }
+
+  private publish(): void {
+    this.#changed.fire(this.dashboardState());
   }
 
   dashboardState(): DashboardState {
-    const source = this.source();
-    const state = this.state();
-    const changes = this.#plan?.changes ?? [];
-    const changed = new Map(changes.map((change) => [change.path, change]));
-    const paths = new Set([...this.#local.map((entry) => entry.path), ...this.#remote?.entries.map((entry) => entry.path) ?? []]);
-    const items: DashboardItem[] = [...paths].sort().map((itemPath) => {
-      const change = changed.get(itemPath);
-      const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
-      const authorship = remote ? this.#authorship.get(`${itemPath}@${remote.contentHash}`) : undefined;
-      const folder = path.dirname(itemPath);
-      return {
-        path: itemPath,
-        name: path.basename(itemPath),
-        type: classifyCursorPath(itemPath),
-        status: change?.status ?? "synced",
-        kind: change?.kind,
-        detail: [folder === "." ? undefined : folder, formatFileAuthorship(authorship ?? {})].filter(Boolean).join(" · "),
-        createdBy: authorship?.createdBy,
-        lastEditedBy: authorship?.lastEditedBy
-      };
-    });
-    return {
-      configured: Boolean(source),
-      projectInitialized: this.projectInitialized(),
-      workspaceName: this.workspaceRoot() ? path.basename(this.workspaceRoot()!) : undefined,
-      hasLocalCursorConfiguration: this.#local.length > 0,
+    const folders = this.folderSummaries();
+    const shared = {
       githubConnected: this.#githubConnected,
-      manifestStatus: this.#manifestStatus,
-      manifestMessage: this.#manifestMessage,
-      trusted: vscode.workspace.isTrusted,
-      source,
-      repositoryUrl: source ? `https://github.com/${source.repository}` : undefined,
-      branch: source?.ref,
-      profile: source?.profile,
-      status: this.#status,
-      statusMessage: this.#statusMessage,
-      lastCheckedAt: this.#lastCheckedAt,
-      updateCheck: this.updateCheck(),
-      items,
-      incomingCount: this.#plan?.incoming.length ?? 0,
-      localCount: this.#plan?.local.length ?? 0,
-      conflictCount: this.#plan?.conflicts.length ?? 0,
-      warningCount: this.#plan?.risks.length ?? 0,
-      proposedCount: state.activeProposal ? this.#plan?.local.length ?? 0 : 0,
-      risks: this.#plan?.risks ?? [],
-      activeProposal: state.activeProposal,
+      gitlabConnected: this.#gitlabConnected,
+      gitlabApprovedHosts: this.approvedGitlabHosts(),
       availableRepositories: this.#availableRepositories,
       repositoriesStatus: this.#repositoriesStatus,
-      repositoriesMessage: this.#repositoriesMessage
+      repositoriesProvider: this.#repositoriesProvider,
+      repositoriesMessage: this.#repositoriesMessage,
+      updateCheck: this.updateCheck(),
+      folders,
+      selectedFolderUri: this.#selectedUri,
+      legacyWorkspaceSource: this.legacyWorkspaceSource()
+    };
+    const selected = this.selected();
+    if (selected) return selected.toDashboardState(shared);
+    return {
+      configured: false,
+      projectInitialized: false,
+      hasLocalCursorConfiguration: false,
+      githubConnected: this.#githubConnected,
+      gitlabConnected: this.#gitlabConnected,
+      gitlabApprovedHosts: shared.gitlabApprovedHosts,
+      manifestStatus: "notChecked",
+      trusted: this.trusted(),
+      status: "unconfigured",
+      statusMessage: "Open a local folder to use RuleSync.",
+      items: [],
+      incomingCount: 0,
+      localCount: 0,
+      conflictCount: 0,
+      warningCount: 0,
+      proposedCount: 0,
+      risks: [],
+      availableRepositories: this.#availableRepositories,
+      repositoriesStatus: this.#repositoriesStatus,
+      repositoriesProvider: this.#repositoriesProvider,
+      repositoriesMessage: this.#repositoriesMessage,
+      updateCheck: shared.updateCheck,
+      folders
     };
   }
 
-  private workspaceRoot(): string | undefined {
-    const folders = vscode.workspace.workspaceFolders;
-    return folders?.length === 1 && folders[0]?.uri.scheme === "file" ? folders[0].uri.fsPath : undefined;
+  private sessionHost(): FolderSessionHost {
+    return {
+      trusted: () => this.trusted(),
+      githubToken: () => this.githubToken(),
+      gitlabToken: (host) => this.gitlabToken(host),
+      gitlabHostAllowed: (host) => this.gitlabHostAllowed(host),
+      approvedGitlabHosts: () => this.approvedGitlabHosts(),
+      createGithub: (token, signal) => this.createGithub(token, signal),
+      createGitlab: (token, baseUrl, signal) => this.createGitlab(token, baseUrl, signal),
+      refreshAccessToken: () => this.refreshAccessToken(),
+      forgetGithubSession: () => this.forgetGithubSession(),
+      forgetGitlabSession: (host) => this.forgetGitlabSession(host),
+      virtualDocuments: this.#virtualDocuments,
+      deps: this.#deps,
+      context: this.context,
+      onChange: () => this.publish(),
+      selectAndOpenDashboard: (uri) => this.selectAndOpenDashboard(uri),
+      updateCheck: () => this.updateCheck()
+    };
   }
 
-  private source(): SourceSpec | undefined {
-    const configured = vscode.workspace.getConfiguration("rulesync").get<SourceSpec[]>("sources", []);
-    return configured.find((source) => source.enabled !== false);
+  private async reconcileFolders(): Promise<void> {
+    const folders = eligibleFolders();
+    const seen = new Set(folders.map((folder) => folderUri(folder)));
+    for (const [uri, session] of this.#sessions) {
+      if (seen.has(uri)) continue;
+      session.dispose();
+      this.#sessions.delete(uri);
+    }
+    for (const folder of folders) {
+      const uri = folderUri(folder);
+      if (!this.#sessions.has(uri)) this.#sessions.set(uri, new FolderSession(folder, this.sessionHost()));
+    }
+    if (folders.length === 1 && !isMultiRoot()) await migrateSingleFolderState(this.context, folders[0]!);
+    const remembered = this.context.workspaceState.get<string>(selectedFolderKey);
+    if (remembered && this.#sessions.has(remembered)) this.#selectedUri = remembered;
+    else if (!this.#selectedUri || !this.#sessions.has(this.#selectedUri)) this.#selectedUri = folders[0] ? folderUri(folders[0]) : undefined;
+    if (this.#selectedUri) await this.context.workspaceState.update(selectedFolderKey, this.#selectedUri);
+    if (!this.trusted()) {
+      this.#githubConnected = false;
+      this.#gitlabConnected = false;
+    }
+    for (const folder of folders) await this.#sessions.get(folderUri(folder))?.initialize();
   }
 
-  private projectInitialized(): boolean {
-    return vscode.workspace.getConfiguration("rulesync").get<boolean>("projectInitialized", false);
+  private async onWorkspaceFoldersChanged(event: vscode.WorkspaceFoldersChangeEvent): Promise<void> {
+    for (const folder of event.removed) {
+      const uri = folderUri(folder);
+      this.#sessions.get(uri)?.dispose();
+      this.#sessions.delete(uri);
+    }
+    for (const folder of event.added) {
+      if (folder.uri.scheme !== "file") continue;
+      const uri = folderUri(folder);
+      if (this.#sessions.has(uri)) continue;
+      const session = new FolderSession(folder, this.sessionHost());
+      this.#sessions.set(uri, session);
+      await session.initialize();
+    }
+    const remaining = eligibleFolders();
+    if (this.#selectedUri && this.#sessions.has(this.#selectedUri)) {
+      this.publish();
+      return;
+    }
+    this.#selectedUri = remaining[0] ? folderUri(remaining[0]) : undefined;
+    if (this.#selectedUri) await this.context.workspaceState.update(selectedFolderKey, this.#selectedUri);
+    await this.syncAuthFlags();
+    this.publish();
   }
 
-  private optOut(): string[] {
-    const source = this.source();
-    if (!source) return [];
-    const all = vscode.workspace.getConfiguration("rulesync").get<Array<{ source: string; paths: string[] }>>("optOut", []);
-    return all.find((entry) => entry.source === source.id)?.paths ?? [];
+  private selected(): FolderSession | undefined {
+    return this.#selectedUri ? this.#sessions.get(this.#selectedUri) : undefined;
   }
 
-  private state(): SyncState {
-    const stored = this.context.workspaceState.get<SyncState>(stateKey);
-    return stored && stored.sourceIdentity === this.sourceIdentity() ? stored : { schemaVersion: 1, sourceIdentity: this.sourceIdentity(), entries: {} };
+  private folderSummaries(): DashboardFolder[] {
+    return eligibleFolders().flatMap((folder) => {
+      const session = this.#sessions.get(folderUri(folder));
+      return session ? [session.summary()] : [];
+    });
   }
 
-  private sourceIdentity(): string {
-    const source = this.source();
-    return source ? `${source.provider}:${source.repository}:${source.ref ?? "default"}:${source.profile}` : "unconfigured";
+  private async selectFolder(uri: string): Promise<void> {
+    if (!this.#sessions.has(uri)) throw new Error("That folder is not in this workspace.");
+    this.#selectedUri = uri;
+    await this.context.workspaceState.update(selectedFolderKey, uri);
+    this.resetRepositoriesIfNeeded(this.selectedProvider(), this.selected()?.gitlabBaseUrl);
+    await this.syncAuthFlags();
+    this.publish();
   }
 
-  private async saveState(next: SyncState): Promise<void> { await this.context.workspaceState.update(stateKey, next); }
+  private async selectAndOpenDashboard(uri: string): Promise<void> {
+    if (this.#sessions.has(uri)) await this.selectFolder(uri);
+    await vscode.commands.executeCommand("rulesync.openDashboard");
+  }
 
-  private async token(): Promise<string | undefined> { return this.context.secrets.get(tokenKey); }
+  private async assignLegacySource(uri: string): Promise<void> {
+    this.assertTrusted();
+    const session = this.#sessions.get(uri);
+    if (!session) throw new Error("That folder is not in this workspace.");
+    await assignLegacyWorkspaceSetup(this.context, session.folder);
+    await this.selectFolder(uri);
+    await session.initialize();
+  }
+
+  private async discardLegacySource(): Promise<void> {
+    this.assertTrusted();
+    const answer = await vscode.window.showWarningMessage("Discard leftover workspace RuleSync setup? No folder will be configured.", { modal: true }, "Discard");
+    if (answer !== "Discard") return;
+    await discardLegacyWorkspaceSetup(this.context);
+    this.publish();
+  }
+
+  private legacyWorkspaceSource(): LegacyWorkspaceSource | undefined {
+    if (!isMultiRoot() || !hasLegacyWorkspaceSetup()) return undefined;
+    const assignment = readLegacyAssignment(this.context);
+    if (assignment?.status === "assigned" || assignment?.status === "discarded") return undefined;
+    const source = configuredSource(inspectWorkspaceSources() ?? []);
+    return source ? { provider: source.provider, repository: source.repository } : { provider: "github", repository: "" };
+  }
+
+  private trusted(): boolean { return vscode.workspace.isTrusted; }
+
+  private selectedProvider(): ProviderId {
+    const selected = this.selected();
+    return selected?.source()?.provider ?? (this.#gitlabConnected && !this.#githubConnected ? "gitlab" : "github");
+  }
+
+  private approvedGitlabHosts(): string[] {
+    return this.context.globalState.get<string[]>(gitlabApprovedHostsKey) ?? [];
+  }
+
+  private gitlabHostAllowed(baseUrl?: string): boolean {
+    return isGitlabHostApproved(baseUrl, this.approvedGitlabHosts());
+  }
+
+  private async githubToken(): Promise<string | undefined> { return this.context.secrets.get(tokenKey); }
+
+  private async gitlabToken(baseUrl?: string): Promise<string | undefined> {
+    const host = (() => { try { return canonicalGitlabBaseUrl(baseUrl ?? this.selected()?.gitlabBaseUrl); } catch { return this.selected()?.gitlabBaseUrl ?? "https://gitlab.com"; } })();
+    if (!this.gitlabHostAllowed(host)) return undefined;
+    return this.context.secrets.get(gitlabPatSecretKey(host));
+  }
+
+  private async syncAuthFlags(): Promise<void> {
+    if (!this.trusted()) {
+      this.#githubConnected = false;
+      this.#gitlabConnected = false;
+      return;
+    }
+    this.#githubConnected = Boolean(await this.githubToken());
+    const host = this.selected()?.gitlabBaseUrl ?? "https://gitlab.com";
+    this.#gitlabConnected = this.gitlabHostAllowed(host) && Boolean(await this.gitlabToken(host));
+  }
 
   private async forgetGithubSession(): Promise<void> {
     await this.context.secrets.delete(tokenKey);
     await this.context.secrets.delete(refreshTokenKey);
     this.#githubConnected = false;
+    if (this.#repositoriesProvider === "github") {
+      this.#availableRepositories = [];
+      this.#repositoriesStatus = "idle";
+      this.#repositoriesProvider = undefined;
+      this.#repositoriesHost = undefined;
+      this.#repositoriesMessage = undefined;
+      this.#repositoriesGeneration += 1;
+    }
+    for (const session of this.#sessions.values()) {
+      if (session.usesProvider("github")) session.markNeedsReview("GitHub sign-in expired. Connect GitHub again.");
+    }
+    this.publish();
   }
 
   private async refreshAccessToken(): Promise<string | undefined> {
     const refreshToken = await this.context.secrets.get(refreshTokenKey);
     if (!refreshToken) return undefined;
     try {
-      const token = await refreshUserAccessToken(this.clientId(), refreshToken);
+      const refresh = this.#deps.refreshUserAccessToken ?? refreshUserAccessToken;
+      const token = await refresh(bundledGithubAppClientId, refreshToken);
       await this.context.secrets.store(tokenKey, token.accessToken);
       if (token.refreshToken) await this.context.secrets.store(refreshTokenKey, token.refreshToken);
       this.#githubConnected = true;
@@ -265,65 +381,122 @@ export class RuleSyncController implements vscode.Disposable {
     } catch { return undefined; }
   }
 
-  private async withGithub<T>(run: (github: GitHubProvider) => Promise<T>): Promise<T> {
-    const token = await this.token();
+  private async forgetGitlabSession(baseUrl?: string): Promise<void> {
+    const host = (() => { try { return canonicalGitlabBaseUrl(baseUrl ?? this.selected()?.gitlabBaseUrl); } catch { return this.selected()?.gitlabBaseUrl ?? "https://gitlab.com"; } })();
+    await this.context.secrets.delete(gitlabPatSecretKey(host));
+    if (this.selected()?.gitlabBaseUrl === host) this.#gitlabConnected = false;
+    if (this.#repositoriesProvider === "gitlab" && this.#repositoriesHost === host) {
+      this.#availableRepositories = [];
+      this.#repositoriesStatus = "idle";
+      this.#repositoriesProvider = undefined;
+      this.#repositoriesHost = undefined;
+      this.#repositoriesMessage = undefined;
+      this.#repositoriesGeneration += 1;
+    }
+    for (const session of this.#sessions.values()) {
+      if (session.usesProvider("gitlab", host)) session.markNeedsReview("Paste a GitLab personal access token to check remote rules.");
+    }
+  }
+
+  private createGithub(token: string, signal?: AbortSignal): RulesProvider {
+    return this.#deps.createGithub?.(token, signal) ?? new GitHubProvider(token, { signal });
+  }
+
+  private createGitlab(token: string, baseUrl: string, signal?: AbortSignal): RulesProvider {
+    return this.#deps.createGitlab?.({ token, baseUrl, signal }) ?? new GitLabProvider({ token, baseUrl, signal });
+  }
+
+  private async withGithub<T>(run: (github: RulesProvider) => Promise<T>): Promise<T> {
+    const token = await this.githubToken();
     if (!token) throw new Error("Sign in to GitHub to continue.");
-    try { return await run(new GitHubProvider(token)); } catch (error) {
+    try { return await run(this.createGithub(token)); } catch (error) {
       if (!isUnauthorized(error)) throw error;
       const next = await this.refreshAccessToken();
       if (!next) {
         await this.forgetGithubSession();
         throw new Error("GitHub sign-in expired. Connect GitHub again.");
       }
-      return run(new GitHubProvider(next));
+      return run(this.createGithub(next));
     }
   }
 
-  private clientId(): string {
-    return vscode.workspace.getConfiguration("rulesync").get<string>("githubAppClientId", "")?.trim() || bundledGithubAppClientId;
+  private async withGitlab<T>(run: (gitlab: RulesProvider) => Promise<T>, baseUrl?: string): Promise<T> {
+    const host = canonicalGitlabBaseUrl(baseUrl ?? this.selected()?.gitlabBaseUrl);
+    if (!this.gitlabHostAllowed(host)) throw new Error(`Approve ${host} before connecting GitLab.`);
+    const token = await this.gitlabToken(host);
+    if (!token) throw new Error("Connect GitLab before choosing a repository.");
+    try { return await run(this.createGitlab(token, host)); } catch (error) {
+      if (!isUnauthorized(error)) throw error;
+      await this.forgetGitlabSession(host);
+      throw new Error("GitLab token expired or was revoked. Paste a new personal access token.");
+    }
   }
 
-  private async loadAccessibleRepositories(): Promise<void> {
-    const token = await this.token();
-    if (!token || this.#repositoriesLoading) return;
+  private repositoriesKey(provider: ProviderId, host?: string): string {
+    return provider === "gitlab" ? `gitlab:${(() => { try { return canonicalGitlabBaseUrl(host); } catch { return host ?? ""; } })()}` : "github";
+  }
+
+  private resetRepositoriesIfNeeded(provider: ProviderId, host?: string): void {
+    const key = this.repositoriesKey(provider, host);
+    const current = this.#repositoriesProvider ? this.repositoriesKey(this.#repositoriesProvider, this.#repositoriesHost) : undefined;
+    if (current === key) return;
+    this.#availableRepositories = [];
+    this.#repositoriesStatus = "idle";
+    this.#repositoriesMessage = undefined;
+    this.#repositoriesProvider = undefined;
+    this.#repositoriesHost = undefined;
+    this.#repositoriesGeneration += 1;
+    this.#repositoriesLoading = false;
+  }
+
+  private async loadAccessibleRepositories(providerId = this.selectedProvider()): Promise<void> {
+    this.assertTrusted();
+    const host = providerId === "gitlab" ? this.selected()?.gitlabBaseUrl ?? "https://gitlab.com" : undefined;
+    if (providerId === "gitlab" && !this.gitlabHostAllowed(host)) throw new Error(`Approve ${host} before listing GitLab projects.`);
+    const token = providerId === "gitlab" ? await this.gitlabToken(host) : await this.githubToken();
+    if (!token) return;
+    const key = this.repositoriesKey(providerId, host);
+    if (this.#repositoriesLoading && this.#repositoriesProvider === providerId && this.repositoriesKey(providerId, this.#repositoriesHost) === key) return;
+    const generation = ++this.#repositoriesGeneration;
     this.#repositoriesLoading = true;
+    this.#repositoriesProvider = providerId;
+    this.#repositoriesHost = host;
+    this.#availableRepositories = [];
     this.#repositoriesStatus = "loading";
     this.#repositoriesMessage = undefined;
     this.publish();
     try {
-      this.#availableRepositories = await this.withGithub((github) => github.listAccessibleRepositories());
+      const repos = providerId === "gitlab" ? await this.withGitlab((provider) => provider.listAccessibleRepositories(), host) : await this.withGithub((provider) => provider.listAccessibleRepositories());
+      if (generation !== this.#repositoriesGeneration) return;
+      this.#availableRepositories = repos;
       this.#repositoriesStatus = "ready";
     } catch (error) {
+      if (generation !== this.#repositoriesGeneration) return;
       this.#availableRepositories = [];
       this.#repositoriesStatus = "error";
-      this.#repositoriesMessage = error instanceof Error ? error.message : "Could not load repositories from GitHub.";
+      this.#repositoriesMessage = error instanceof Error ? error.message : `Could not load repositories from ${providerId === "gitlab" ? "GitLab" : "GitHub"}.`;
     } finally {
-      this.#repositoriesLoading = false;
+      if (generation === this.#repositoriesGeneration) this.#repositoriesLoading = false;
       this.publish();
     }
   }
 
   private assertTrusted(): void {
-    if (!vscode.workspace.isTrusted) throw new Error("Trust this workspace before RuleSync reads or writes local files.");
-  }
-
-  private async loadLocal(): Promise<void> {
-    const root = this.workspaceRoot();
-    this.#local = root ? await listFiles(root) : [];
-  }
-
-  private startWatching(): void {
-    const root = this.workspaceRoot();
-    if (!root) return;
-    this.#watcher = chokidar.watch(path.join(root, ".cursor"), { ignoreInitial: true, awaitWriteFinish: { stabilityThreshold: 750, pollInterval: 100 } });
-    this.#watcher.on("all", () => void this.onLocalChange());
+    if (!this.trusted()) throw new Error("Trust this workspace before RuleSync reads or writes local files.");
   }
 
   private startPolling(): void {
     if (this.#timer) clearInterval(this.#timer);
+    if (!this.trusted()) return;
     const settings = this.updateCheck();
     if (settings.mode !== "timed" && settings.mode !== "both") return;
-    this.#timer = setInterval(() => void this.maybeRefresh("timer"), 60_000);
+    this.#timer = setInterval(() => void this.refreshConfigured("timer"), 60_000);
+  }
+
+  private async refreshConfigured(trigger: UpdateCheckTrigger): Promise<void> {
+    for (const session of this.#sessions.values()) {
+      if (session.source()) await session.maybeRefresh(trigger);
+    }
   }
 
   private updateCheck(): UpdateCheckSettings {
@@ -340,9 +513,7 @@ export class RuleSyncController implements vscode.Disposable {
     }
     const inspected = cfg.inspect<number>("checkIntervalMinutes");
     const legacy = inspected?.workspaceValue ?? inspected?.globalValue;
-    if (typeof legacy === "number") {
-      return { ...defaultUpdateCheck, mode: "timed", interval: legacy <= 90 ? "hourly" : "daily" };
-    }
+    if (typeof legacy === "number") return { ...defaultUpdateCheck, mode: "timed", interval: legacy <= 90 ? "hourly" : "daily" };
     return { ...defaultUpdateCheck };
   }
 
@@ -356,570 +527,90 @@ export class RuleSyncController implements vscode.Disposable {
     await cfg.update("updateCheck.onDashboardOpen", settings.onDashboardOpen, target);
   }
 
-  private async notifyRemoteUpdates(state: SyncState): Promise<void> {
-    const plan = this.#plan;
-    if (!plan) return;
-    const incomingKeys = plan.incoming.map((change) => changeKey(change.path, change.remote?.contentHash));
-    const conflictKeys = plan.conflicts.map((change) => changeKey(change.path, change.remote?.contentHash));
-    const keys = [...incomingKeys, ...conflictKeys];
-    const fresh = unseenKeys(state.notifiedIncoming, keys);
-    state.notifiedIncoming = keys;
-    await this.saveState(state);
-    if (!fresh.length) return;
-    const incoming = incomingKeys.filter((key) => fresh.includes(key)).length;
-    const conflicts = conflictKeys.filter((key) => fresh.includes(key)).length;
-    const message = remoteUpdateMessage(incoming, conflicts);
-    if (!message) return;
-    const answer = await vscode.window.showInformationMessage(message, "Review");
-    if (answer === "Review") await vscode.commands.executeCommand("rulesync.openDashboard");
-  }
-
-  private async maybeRefresh(trigger: UpdateCheckTrigger): Promise<void> {
-    const settings = this.updateCheck();
-    if (!shouldRunUpdateCheck(settings, trigger)) return;
-    if (trigger === "timer" && !isUpdateCheckDue(this.#lastCheckedAt, updateCheckIntervalMs(settings.interval))) return;
-    if ((trigger === "focus" || trigger === "dashboard") && !isUpdateCheckDue(this.#lastCheckedAt, 2 * 60_000)) return;
-    await this.refresh();
-  }
-
-  private async onLocalChange(): Promise<void> {
-    try {
-      await this.loadLocal();
-      this.rebuildPlan();
-      if (this.source()) {
-        this.#status = this.#plan && (this.#plan.local.length || this.#plan.conflicts.length) ? "needsReview" : "synced";
-        this.#statusMessage = this.#plan?.local.length ? "Local changes are ready for review." : this.#statusMessage;
-      }
-      this.publish();
-    } catch (error) { this.fail(error); }
-  }
-
-  private rebuildPlan(): void {
-    const remote = this.#remote?.entries ?? [];
-    this.#plan = planSync({ baseline: this.state().entries, local: this.#local, remote, optOut: this.optOut(), classify: classifyCursorPath, risks: scanRisks([...this.#local, ...remote]), acceptedRisks: this.state().acceptedRisks });
-  }
-
-  private contentHashes(): Map<string, string> {
-    const hashes = new Map<string, string>();
-    for (const entry of this.#remote?.entries ?? []) hashes.set(entry.path, entry.contentHash);
-    for (const entry of this.#local) hashes.set(entry.path, entry.contentHash);
-    return hashes;
-  }
-
-  private async acceptVisibleRisks(): Promise<void> {
-    if (!this.#plan?.risks.length) return;
-    const state = this.state();
-    state.acceptedRisks = acceptRisks(state.acceptedRisks, this.#plan.risks, this.contentHashes());
-    await this.saveState(state);
-    this.rebuildPlan();
-    this.publish();
-  }
-
-  private async loadAuthorship(): Promise<void> {
-    const generation = ++this.#authorshipGeneration;
-    const source = this.source();
-    const remote = this.#remote;
-    if (!source || !remote) return;
-    const missing = remote.entries.filter((entry) => !this.#authorship.has(`${entry.path}@${entry.contentHash}`));
-    if (!missing.length) return;
-    try {
-      await this.withGithub(async (provider) => {
-        for (let index = 0; index < missing.length; index += 5) {
-          if (generation !== this.#authorshipGeneration) return;
-          await Promise.all(missing.slice(index, index + 5).map(async (entry) => {
-            try {
-              const info = await provider.getFileAuthorship(source.repository, entry.path, remote.commit);
-              if (info) this.#authorship.set(`${entry.path}@${entry.contentHash}`, info);
-            } catch { /* leave the row without git authors */ }
-          }));
-          if (generation === this.#authorshipGeneration) this.publish();
-        }
-      });
-    } catch { /* authorship is additive */ }
-  }
-
-  private publish(): void { this.#changed.fire(this.dashboardState()); }
-
-  private fail(error: unknown): void {
-    if (isUnauthorized(error)) {
-      void this.forgetGithubSession();
-      this.#githubConnected = false;
-      this.#status = "needsReview";
-      this.#statusMessage = "GitHub sign-in expired. Connect GitHub again.";
-      this.publish();
-      return;
-    }
-    this.#status = "error";
-    this.#statusMessage = githubUserMessage(error);
-    this.publish();
-  }
-
   private async authenticate(): Promise<void> {
-    const clientId = this.clientId();
+    this.assertTrusted();
+    const requestCode = this.#deps.requestDeviceCode ?? requestDeviceCode;
+    const poll = this.#deps.pollDeviceToken ?? pollDeviceToken;
+    const selected = this.selected();
     try {
-      const device = await requestDeviceCode(clientId);
+      const device = await requestCode(bundledGithubAppClientId);
       await vscode.env.openExternal(vscode.Uri.parse(device.verificationUri));
       void vscode.window.showInformationMessage(`Enter GitHub code ${device.userCode} to connect RuleSync.`);
-      this.#status = "checking";
-      this.#statusMessage = `Waiting for GitHub authorization: ${device.userCode}`;
+      selected?.setStatus("checking", `Waiting for GitHub authorization: ${device.userCode}`);
       this.publish();
       const deadline = Date.now() + device.expiresIn * 1000;
       while (Date.now() < deadline) {
         await new Promise((resolve) => setTimeout(resolve, device.interval * 1000));
-        const token = await pollDeviceToken(clientId, device.deviceCode);
+        const token = await poll(bundledGithubAppClientId, device.deviceCode);
         if (!token) continue;
         await this.context.secrets.store(tokenKey, token.accessToken);
         if (token.refreshToken) await this.context.secrets.store(refreshTokenKey, token.refreshToken);
+        if (selected?.source()?.provider === "gitlab") await selected.clearConfiguredSource();
         this.#githubConnected = true;
-        this.#status = "needsReview";
-        this.#statusMessage = "GitHub connected. Choose a rules repository.";
-        await this.loadAccessibleRepositories();
-        await this.refresh();
+        selected?.setStatus("needsReview", "GitHub connected. Choose a rules repository.");
+        await this.loadAccessibleRepositories("github");
+        for (const session of this.#sessions.values()) {
+          if (session.usesProvider("github")) await session.refresh();
+        }
+        if (!selected?.source()) this.publish();
         return;
       }
       throw new Error("GitHub authorization timed out.");
-    } catch (error) { this.fail(error); }
-  }
-
-  private async saveClientId(clientId: string): Promise<void> {
-    await vscode.workspace.getConfiguration("rulesync").update("githubAppClientId", clientId.trim(), vscode.ConfigurationTarget.Workspace);
-    await this.authenticate();
-  }
-
-  private async initializeWorkspace(): Promise<void> {
-    const root = this.workspaceRoot();
-    if (!root) throw new Error("Open a single project folder before initializing RuleSync.");
-    await vscode.workspace.getConfiguration("rulesync").update("projectInitialized", true, vscode.ConfigurationTarget.Workspace);
-    this.#status = "unconfigured";
-    this.#statusMessage = this.#local.length ? "This workspace has Cursor configuration ready to share." : "Workspace initialized. Connect a shared rules repository next.";
-    this.publish();
-  }
-
-  private async saveSource(source: SourceSpec): Promise<void> {
-    if (source.provider !== "github" || !source.repository || !source.profile) throw new Error("Repository and profile are required.");
-    await vscode.workspace.getConfiguration("rulesync").update("projectInitialized", true, vscode.ConfigurationTarget.Workspace);
-    await vscode.workspace.getConfiguration("rulesync").update("sources", [{ ...source, enabled: true }], vscode.ConfigurationTarget.Workspace);
-    await this.saveState({ schemaVersion: 1, sourceIdentity: this.sourceIdentity(), entries: {} });
-    await this.initialize();
-  }
-
-  async refresh(): Promise<void> {
-    if (this.#refreshing || !this.source()) return;
-    const token = await this.token();
-    if (!token) { this.#status = "needsReview"; this.#statusMessage = "Sign in to GitHub to check remote rules."; this.publish(); return; }
-    this.#refreshing = true;
-    this.#status = "checking";
-    this.#statusMessage = "Checking remote rules…";
-    this.publish();
-    try {
-      const source = this.source()!;
-      await this.withGithub(async (provider) => {
-      let repository: { defaultBranch: string; fullName: string };
-      try {
-        repository = await provider.verifyRepository(source.repository);
-      } catch (error) {
-        if (this.isNotFound(error) || this.isForbidden(error)) {
-          throw new Error("RuleSync cannot access this repository. Install the RuleSync GitHub App on it, then check again.");
-        }
-        throw error;
-      }
-      const branch = source.ref || repository.defaultBranch;
-      let commit: string;
-      try {
-        commit = await provider.getRef(source.repository, branch);
-      } catch (error) {
-        if ((this.isNotFound(error) || this.isConflict(error)) && await provider.isEmptyRepository(source.repository)) {
-          this.#remote = undefined;
-          this.#manifestStatus = "empty";
-          this.#manifestMessage = `${source.repository} has no ${branch} branch.`;
-          this.rebuildPlan();
-          this.#lastCheckedAt = new Date().toISOString();
-          this.#status = "needsReview";
-          this.#statusMessage = `${source.repository} has no ${branch} branch. RuleSync can create it for you.`;
-          this.publish();
-          return;
-        }
-        throw error;
-      }
-      let manifestText: string;
-      try {
-        manifestText = new TextDecoder().decode(await provider.getFileAtRef(source.repository, commit, "rulesync.yml"));
-      } catch (error: unknown) {
-        if (this.isNotFound(error)) {
-          this.#remote = { commit, entries: [] };
-          this.#manifestStatus = "missing";
-          this.#manifestMessage = "This repository has no rulesync.yml yet.";
-          this.rebuildPlan();
-          this.#lastCheckedAt = new Date().toISOString();
-          this.#status = "needsReview";
-          this.#statusMessage = "Initialize this repository with a RuleSync manifest.";
-          this.publish();
-          return;
-        }
-        throw error;
-      }
-      this.#manifestStatus = "ready";
-      this.#manifestMessage = undefined;
-      const profile = profileByName(parseManifest(manifestText), source.profile);
-      if (profile.adapter !== "cursor") throw new Error("The MVP dashboard currently supports Cursor project profiles only.");
-      const prefix = `${profile.source.replace(/\/$/, "")}/`;
-      const tree = await provider.getTree(source.repository, commit);
-      const candidates = tree.filter((entry) => entry.path.startsWith(prefix));
-      const entries = await Promise.all(candidates.map(async (entry) => {
-        const content = await provider.getBlob(source.repository, entry.oid);
-        return { path: entry.path, content, contentHash: hash(content), size: content.byteLength, mode: entry.mode } satisfies FileEntry;
-      }));
-      this.#remote = { commit, entries };
-      const state = this.state();
-      for (const local of this.#local) {
-        const remote = entries.find((entry) => entry.path === local.path);
-        if (remote && remote.contentHash === local.contentHash && !state.entries[local.path]) {
-          state.entries[local.path] = { remoteOid: remote.contentHash, localHash: local.contentHash, mode: local.mode };
-        }
-      }
-      await this.saveState(state);
-      this.rebuildPlan();
-      if (state.activeProposal) {
-        const pullRequest = await provider.findPullRequest(source.repository, state.activeProposal.branch);
-        if (pullRequest) state.activeProposal.pullRequest = pullRequest;
-        else if (!shouldKeepProposal(false, this.#plan?.local.length ?? 0)) delete state.activeProposal;
-        await this.saveState(state);
-      }
-      this.#lastCheckedAt = new Date().toISOString();
-      state.lastCheckedAt = this.#lastCheckedAt;
-      await this.saveState(state);
-      const plan = this.#plan;
-      this.#status = plan && (plan.conflicts.length || plan.incoming.length || plan.local.length) ? "needsReview" : "synced";
-      this.#statusMessage = this.#status === "synced" ? "Everything is synchronized." : "Changes are ready for review.";
-      this.publish();
-      void this.notifyRemoteUpdates(state);
-      void this.loadAuthorship();
-      });
     } catch (error) {
-      this.#manifestStatus = this.#manifestStatus === "ready" ? "invalid" : this.#manifestStatus;
-      if (this.#manifestStatus === "invalid") this.#manifestMessage = "The remote rulesync.yml could not be validated.";
-      this.fail(error);
-    }
-    finally { this.#refreshing = false; }
-    if (this.#manifestStatus === "empty" && !this.#offeredEmptyMain) {
-      this.#offeredEmptyMain = true;
-      void this.createEmptyMain();
+      selected?.setStatus("error", providerUserMessage("github", error));
+      this.publish();
     }
   }
 
-  private async open(itemPath: string): Promise<void> {
-    const root = this.workspaceRoot();
-    if (!root) return;
-    const local = this.#local.find((entry) => entry.path === itemPath);
-    if (local) await vscode.window.showTextDocument(vscode.Uri.file(workspacePath(root, itemPath)), { preview: true });
-    else {
-      const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
-      if (remote) await vscode.window.showTextDocument(this.#virtualDocuments.set("rulesync-remote", itemPath, remote.content), { preview: true });
-    }
-  }
-
-  private async diff(itemPath: string, comparison: "remote" | "base"): Promise<void> {
-    const root = this.workspaceRoot();
-    const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
-    const local = this.#local.find((entry) => entry.path === itemPath);
-    if (!root || !remote && !local) return;
-    const incoming = comparison === "remote" && this.#plan?.changes.find((change) => change.path === itemPath)?.status === "incoming";
-    const remoteUri = this.#virtualDocuments.set("rulesync-remote", itemPath, remote?.content);
-    const localUri = local ? vscode.Uri.file(workspacePath(root, itemPath)) : this.#virtualDocuments.set("rulesync-base", itemPath, undefined);
-    if (incoming) {
-      await vscode.commands.executeCommand("vscode.diff", localUri, remoteUri, `Local → Remote: ${path.basename(itemPath)}`);
-      return;
-    }
-    const left = comparison === "remote" ? remoteUri : this.#virtualDocuments.set("rulesync-base", itemPath, remote?.content);
-    await vscode.commands.executeCommand("vscode.diff", left, localUri, `${comparison === "remote" ? "Remote" : "Baseline"} ↔ Local: ${path.basename(itemPath)}`);
-  }
-
-  private async create(request: Extract<DashboardCommand, { type: "content.create" }> ["request"]): Promise<void> {
+  private async approveGitlabHost(baseUrl: string): Promise<void> {
     this.assertTrusted();
-    const root = this.workspaceRoot();
-    if (!root) return;
-    const content = createCursorContent(request);
-    await writeFile(root, { path: content.path, content: new TextEncoder().encode(content.contents), contentHash: "", size: content.contents.length, mode: content.mode });
-    await this.onLocalChange();
-    await this.open(content.path);
-  }
-
-  private async rename(previous: string): Promise<void> {
-    this.assertTrusted();
-    const root = this.workspaceRoot();
-    if (!root) return;
-    if (!this.#local.some((entry) => entry.path === previous)) throw new Error("Pull this file before renaming it.");
-    const typed = await vscode.window.showInputBox({ title: "Rename managed file", prompt: "New path under .cursor", value: previous, ignoreFocusOut: true, validateInput: (value) => { try { managedRenamePath(previous, value); return; } catch (error) { return error instanceof Error ? error.message : "Invalid path"; } } });
-    if (!typed) return;
-    const next = managedRenamePath(previous, typed);
-    if (this.#local.some((entry) => entry.path === next)) throw new Error("A managed file already exists at that path.");
-    await renameFile(root, previous, next);
-    await this.onLocalChange();
-  }
-
-  private async delete(itemPath: string): Promise<void> {
-    this.assertTrusted();
-    const root = this.workspaceRoot();
-    if (!root) return;
-    const answer = await vscode.window.showWarningMessage(`Delete ${path.basename(itemPath)} locally? This will become a proposal change.`, { modal: true }, "Delete");
-    if (answer !== "Delete") return;
-    await removeFile(root, itemPath);
-    await this.onLocalChange();
-  }
-
-  private async revert(itemPath: string): Promise<void> {
-    this.assertTrusted();
-    const root = this.workspaceRoot();
-    const local = this.#local.find((entry) => entry.path === itemPath);
-    const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
-    if (!root || !local) throw new Error("This file is not in the workspace.");
-    const name = path.basename(itemPath);
-    if (remote) {
-      const answer = await vscode.window.showWarningMessage(`Revert ${name} to the remote version? Local edits will be lost.`, { modal: true }, "Revert");
-      if (answer !== "Revert") return;
-      await writeFile(root, remote);
-    } else {
-      const answer = await vscode.window.showWarningMessage(`Discard ${name}? This new local file will be deleted.`, { modal: true }, "Discard");
-      if (answer !== "Discard") return;
-      await removeFile(root, itemPath);
+    const host = canonicalGitlabBaseUrl(baseUrl);
+    if (host !== "https://gitlab.com") {
+      const answer = await vscode.window.showWarningMessage(`Allow RuleSync to use GitLab at ${host}? Tokens for this host stay in this editor and are never sent to another host.`, { modal: true }, "Allow this host");
+      if (answer !== "Allow this host") return;
+      const next = [...new Set([...this.approvedGitlabHosts(), host])];
+      await this.context.globalState.update(gitlabApprovedHostsKey, next);
     }
-    await this.onLocalChange();
-  }
-
-  private async resolve(itemPath: string, resolution: "local" | "remote"): Promise<void> {
-    const root = this.workspaceRoot();
-    const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
-    if (!root || !remote) throw new Error("Remote content is unavailable for this conflict.");
-    if (resolution === "remote") {
-      this.assertTrusted();
-      await writeFile(root, remote);
-      await this.onLocalChange();
-      return;
+    const selected = this.selected();
+    selected?.rememberGitlabHost(host);
+    if (selected) await this.context.workspaceState.update(folderGitlabBaseUrlKey(selected.uri), host);
+    await this.syncAuthFlags();
+    for (const session of this.#sessions.values()) {
+      if (session.usesProvider("gitlab", host)) await session.initialize();
     }
-    const state = this.state();
-    state.entries[itemPath] = { remoteOid: remote.contentHash, localHash: remote.contentHash, mode: remote.mode };
-    await this.saveState(state);
-    this.rebuildPlan();
+    if (this.#gitlabConnected && selected?.source()?.provider === "gitlab") return;
+    selected?.setStatus("needsReview", this.#gitlabConnected ? "GitLab connected. Choose a rules project." : "Paste a GitLab personal access token to check remote rules.");
     this.publish();
   }
 
-  private async applyOne(itemPath: string): Promise<void> {
-    if (!await this.writeIncoming([itemPath])) return;
-    this.#status = this.#plan?.incoming.length || this.#plan?.local.length || this.#plan?.conflicts.length ? "needsReview" : "synced";
-    this.#statusMessage = `Pulled ${path.basename(itemPath)}.`;
-    this.publish();
-  }
-
-  private async applyAll(): Promise<void> {
-    if (!this.#plan || !this.#remote) throw new Error("Check remote rules before applying updates.");
-    if (this.#plan.conflicts.length) throw new Error("Resolve every conflict before applying remote updates.");
-    if (!this.#plan.incoming.length) return;
-    if (!await this.writeIncoming(this.#plan.incoming.map((change) => change.path))) return;
-    const state = this.state();
-    for (const remote of this.#remote.entries) {
-      const local = this.#local.find((entry) => entry.path === remote.path);
-      if (local?.contentHash === remote.contentHash) state.entries[remote.path] = { remoteOid: remote.contentHash, localHash: remote.contentHash, mode: remote.mode };
-    }
-    for (const trackedPath of Object.keys(state.entries)) {
-      if (!this.#remote.entries.some((entry) => entry.path === trackedPath) && !this.#local.some((entry) => entry.path === trackedPath)) delete state.entries[trackedPath];
-    }
-    state.baselineCommit = this.#remote.commit;
-    await this.saveState(state);
-    this.rebuildPlan();
-    this.#status = this.#plan.local.length ? "needsReview" : "synced";
-    this.#statusMessage = "Remote updates applied.";
-    this.publish();
-  }
-
-  private async writeIncoming(paths: readonly string[]): Promise<boolean> {
+  private async openGitlabPatHelp(baseUrl?: string): Promise<void> {
     this.assertTrusted();
-    if (!this.#plan || !this.#remote) throw new Error("Check remote rules before applying updates.");
-    const incoming = new Set(this.#plan.incoming.map((change) => change.path));
-    for (const itemPath of paths) {
-      if (!incoming.has(itemPath)) throw new Error(`${path.basename(itemPath)} is not waiting to be pulled.`);
-    }
-    const risky = this.#plan.risks.filter((risk) => paths.includes(risk.path));
-    if (risky.length) {
-      const single = paths.length === 1;
-      const answer = await vscode.window.showWarningMessage(single ? `Pull ${path.basename(paths[0]!)}? It includes ${risky.length} security warning(s).` : `Apply ${paths.length} remote changes, including ${risky.length} security warning(s)?`, { modal: true }, single ? "Pull" : "Apply Changes");
-      if (answer !== "Pull" && answer !== "Apply Changes") return false;
-      const state = this.state();
-      state.acceptedRisks = acceptRisks(state.acceptedRisks, risky, this.contentHashes());
-      await this.saveState(state);
-    }
-    const root = this.workspaceRoot();
-    if (!root) return false;
-    for (const itemPath of paths) {
-      const remote = this.#remote.entries.find((entry) => entry.path === itemPath);
-      if (remote) await writeFile(root, remote);
-      else await removeFile(root, itemPath);
-    }
-    await this.loadLocal();
-    const state = this.state();
-    for (const itemPath of paths) {
-      const remote = this.#remote.entries.find((entry) => entry.path === itemPath);
-      const local = this.#local.find((entry) => entry.path === itemPath);
-      if (remote && local?.contentHash === remote.contentHash) state.entries[itemPath] = { remoteOid: remote.contentHash, localHash: remote.contentHash, mode: remote.mode };
-      else if (!remote && !local) delete state.entries[itemPath];
-    }
-    await this.saveState(state);
-    this.rebuildPlan();
-    return true;
+    const host = canonicalGitlabBaseUrl(baseUrl);
+    if (!this.gitlabHostAllowed(host)) throw new Error(`Approve ${host} before opening GitLab token help.`);
+    await vscode.env.openExternal(vscode.Uri.parse(gitlabPatCreateUrl(host)));
   }
 
-  private async publishProposal(message: string): Promise<void> {
+  private async saveGitlabToken(baseUrl: string | undefined, token: string): Promise<void> {
     this.assertTrusted();
-    const source = this.source();
-    const token = await this.token();
-    if (!source || !token || !this.#plan) throw new Error("Connect and refresh a rules source before publishing.");
-    if (this.#manifestStatus === "empty" || !this.#remote) {
-      await this.createEmptyMain();
-      return;
+    const host = canonicalGitlabBaseUrl(baseUrl);
+    if (!this.gitlabHostAllowed(host)) throw new Error(`Approve ${host} before saving a GitLab token.`);
+    const trimmed = token.trim();
+    if (!trimmed) throw new Error("A GitLab personal access token is required.");
+    const gitlab = this.createGitlab(trimmed, host);
+    await gitlab.authenticatedLogin();
+    if ("assertApiScope" in gitlab && typeof gitlab.assertApiScope === "function") await gitlab.assertApiScope();
+    await this.context.secrets.store(gitlabPatSecretKey(host), trimmed);
+    const selected = this.selected();
+    selected?.rememberGitlabHost(host);
+    if (selected) await this.context.workspaceState.update(folderGitlabBaseUrlKey(selected.uri), host);
+    if (selected?.source()?.provider === "github") await selected.clearConfiguredSource();
+    this.#gitlabConnected = true;
+    selected?.setStatus("needsReview", "GitLab connected. Choose a rules project.");
+    this.resetRepositoriesIfNeeded("gitlab", host);
+    await this.loadAccessibleRepositories("gitlab");
+    for (const session of this.#sessions.values()) {
+      if (session.usesProvider("gitlab", host)) await session.refresh();
     }
-    if (this.#manifestStatus !== "ready") throw new Error("Create and merge rulesync.yml before publishing managed configuration.");
-    if (this.#plan.incoming.length || this.#plan.conflicts.length) throw new Error("Review remote updates and conflicts before publishing local changes.");
-    if (!this.#plan.local.length) throw new Error("There are no local changes to publish.");
-    const risky = this.#plan.risks.filter((risk) => this.#plan!.local.some((change) => change.path === risk.path));
-    if (risky.length) {
-      const answer = await vscode.window.showWarningMessage(`Publish ${this.#plan.local.length} local changes, including ${risky.length} security warning(s)?`, { modal: true }, "Publish Branch");
-      if (answer !== "Publish Branch") return;
-      const state = this.state();
-      state.acceptedRisks = acceptRisks(state.acceptedRisks, risky, this.contentHashes());
-      await this.saveState(state);
-    }
-    await this.withGithub(async (provider) => {
-      const verified = await provider.verifyRepository(source.repository);
-      const baseBranch = source.ref || verified.defaultBranch;
-      const latest = await provider.getRef(source.repository, baseBranch);
-      if (latest !== this.#remote!.commit) throw new Error("The remote branch changed. Refresh and review before publishing.");
-      const state = this.state();
-      const existing = state.activeProposal;
-      if (existing) {
-        const actualHead = await provider.getRef(source.repository, existing.branch);
-        if (actualHead !== existing.headCommit) throw new Error("The proposal branch changed outside RuleSync. Refresh it on GitHub before updating.");
-      }
-      const branch = existing?.branch ?? `rulesync/${this.githubSafeName(await provider.authenticatedLogin())}/${this.branchTimestamp()}`;
-      const proposal = await provider.createProposal({ repository: source.repository, baseBranch, baseCommit: this.#remote!.commit, branch, parentCommit: existing?.headCommit, updateExisting: Boolean(existing), message: message.trim() || "chore(rules): propose RuleSync updates", changes: this.#plan!.local.map((change) => ({ path: change.path, entry: this.#local.find((entry) => entry.path === change.path) })) });
-      state.activeProposal = proposal;
-      await this.saveState(state);
-      this.#status = "needsReview";
-      this.#statusMessage = "Proposal branch is ready. Create the pull request on GitHub.";
-      this.publish();
-    });
-  }
-
-  private githubSafeName(login: string): string { return login.toLowerCase().replace(/[^a-z0-9-]/g, "-") || "user"; }
-  private branchTimestamp(): string { return new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, ""); }
-
-  private async openCompare(): Promise<void> {
-    const proposal = this.state().activeProposal;
-    if (!proposal) throw new Error("Publish a proposal branch first.");
-    await vscode.env.clipboard.writeText("chore(rules): propose RuleSync updates");
-    await vscode.env.openExternal(vscode.Uri.parse(proposal.pullRequest?.url ?? proposal.compareUrl));
-  }
-
-  private async initializeManifest(): Promise<void> {
-    if (this.#manifestStatus === "empty") {
-      await this.createEmptyMain();
-      return;
-    }
-    const source = this.source();
-    const token = await this.token();
-    if (!source || !token || !this.#remote || this.#manifestStatus !== "missing") throw new Error("Connect a repository without rulesync.yml before initializing it.");
-    const answer = await vscode.window.showInformationMessage("Create a RuleSync starter manifest on a new proposal branch, then open the pull request?", { modal: true }, "Create Branch");
-    if (answer !== "Create Branch") return;
-    await this.withGithub(async (provider) => {
-      const repository = await provider.verifyRepository(source.repository);
-      const baseBranch = source.ref || repository.defaultBranch;
-      const branch = `rulesync/${this.githubSafeName(await provider.authenticatedLogin())}/initialize-${this.branchTimestamp()}`;
-      const contents = new TextEncoder().encode("version: 1\n\nprofiles:\n  cursor-project:\n    adapter: cursor\n    scope: project\n    source: .cursor\n    mode: mirror\n");
-      const proposal = await provider.createProposal({
-        repository: source.repository,
-        baseBranch,
-        baseCommit: this.#remote!.commit,
-        branch,
-        message: "chore(rules): initialize RuleSync manifest",
-        changes: [{ path: "rulesync.yml", entry: { path: "rulesync.yml", content: contents, contentHash: hash(contents), size: contents.byteLength, mode: "file" } }]
-      });
-      const state = this.state();
-      state.activeProposal = proposal;
-      try {
-        state.activeProposal.pullRequest = await provider.createPullRequest(source.repository, {
-          title: "chore(rules): initialize RuleSync manifest",
-          head: proposal.branch,
-          base: baseBranch,
-          body: "Adds the starter rulesync.yml so this repository can sync Cursor configuration."
-        });
-      } catch { /* compare URL remains if the app cannot open pull requests */ }
-      await this.saveState(state);
-      this.#manifestStatus = "pending";
-      this.#manifestMessage = state.activeProposal.pullRequest
-        ? `Pull request #${state.activeProposal.pullRequest.number} is ready. Merge it on GitHub, then check again.`
-        : "Starter manifest is on a proposal branch. Create and merge the pull request on GitHub.";
-      this.#status = "needsReview";
-      this.#statusMessage = state.activeProposal.pullRequest ? "Manifest pull request is ready to merge." : "Manifest proposal branch is ready.";
-      this.publish();
-    });
-  }
-
-  private async createEmptyMain(): Promise<void> {
-    if (this.#creatingEmptyMain) return;
-    this.#creatingEmptyMain = true;
-    try { await this.createEmptyMainOnce(); } finally { this.#creatingEmptyMain = false; }
-  }
-
-  private async createEmptyMainOnce(): Promise<void> {
-    const source = this.source();
-    const token = await this.token();
-    if (!source || !token || this.#manifestStatus !== "empty") throw new Error("This repository already has a base branch.");
-    const branch = source.ref || "main";
-    const answer = await vscode.window.showInformationMessage(
-      `${source.repository} has no ${branch} branch. Create it for you so RuleSync can open pull requests?`,
-      { modal: true },
-      "Create it for me"
-    );
-    if (answer !== "Create it for me") return;
-    await this.withGithub(async (provider) => {
-      const repository = await provider.verifyRepository(source.repository);
-      const baseBranch = source.ref || repository.defaultBranch || "main";
-      if (!await provider.isEmptyRepository(source.repository)) {
-        await this.refresh();
-        return;
-      }
-      const commit = await provider.createEmptyBranch(source.repository, baseBranch);
-      this.#remote = { commit, entries: [] };
-      this.#manifestStatus = "missing";
-      this.#manifestMessage = `${baseBranch} is ready. Initialize rulesync.yml next.`;
-      this.#status = "needsReview";
-      this.#statusMessage = `${baseBranch} exists. Create the rulesync.yml pull request next.`;
-      this.rebuildPlan();
-      this.publish();
-    });
-    await this.refresh();
-  }
-
-  private isNotFound(error: unknown): boolean {
-    return typeof error === "object" && error !== null && "status" in error && (error as { status?: unknown }).status === 404;
-  }
-
-  private isConflict(error: unknown): boolean {
-    return typeof error === "object" && error !== null && "status" in error && (error as { status?: unknown }).status === 409;
-  }
-
-  private isForbidden(error: unknown): boolean {
-    return typeof error === "object" && error !== null && "status" in error && (error as { status?: unknown }).status === 403;
-  }
-
-  private async disconnect(): Promise<void> {
-    await vscode.workspace.getConfiguration("rulesync").update("sources", [], vscode.ConfigurationTarget.Workspace);
-    await this.context.workspaceState.update(stateKey, undefined);
-    this.#remote = undefined;
-    this.#manifestStatus = "notChecked";
-    this.#manifestMessage = undefined;
-    this.#offeredEmptyMain = false;
-    this.#availableRepositories = [];
-    this.#repositoriesStatus = "idle";
-    this.#repositoriesMessage = undefined;
-    await this.initialize();
+    if (!selected?.source() || selected.source()?.provider !== "gitlab") this.publish();
   }
 }

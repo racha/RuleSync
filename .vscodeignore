@@ -5,5 +5,10 @@
 !README.md
 !CHANGELOG.md
 !LICENSE
+*.map
 **/*.map
+dist/**/*.map
+dist/extension.cjs.map
+dist/edhSmoke.cjs
+dist/webview/assets/webview.js.map
 

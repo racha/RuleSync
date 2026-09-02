@@ -1,43 +1,161 @@
+import { createPortal } from "react-dom";
 import { createRoot } from "react-dom/client";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import "./styles.css";
+import { awaitsHost, canToggleLocalDisable, connectSetupCopy, defaultSetupProvider, emptyRepositoryCopy, folderSwitchReset, gitlabHostSessionReady, hostIsApproved, legacyWorkspaceNotice, matchesBusy, proposalCommitMessage, recoveredGitlabUrl, repositorySetupCopy, setupGitlabKind, setupStatusNotice, splitRisks, visibleSetupRepos } from "./setup.js";
 
 type ContentType = "rule" | "hook" | "skill" | "agent" | "command" | "mcp" | "configuration" | "other";
 type Status = "synced" | "incoming" | "local" | "conflict" | "converged" | "optedOut" | "proposed";
 type ChangeKind = "added" | "modified" | "deleted" | "mode";
-type Source = { id: string; provider: "github"; repository: string; ref?: string; profile: string; enabled?: boolean };
+type Source = { id: string; provider: "github" | "gitlab"; repository: string; baseUrl?: string; ref?: string; profile: string; enabled?: boolean };
 type AvailableRepository = { repository: string; defaultBranch: string; private: boolean };
-type Item = { path: string; name: string; type: ContentType; status: Status; kind?: ChangeKind; detail?: string; createdBy?: string; lastEditedBy?: string };
+type Item = { path: string; name: string; type: ContentType; status: Status; kind?: ChangeKind; detail?: string; createdBy?: string; lastEditedBy?: string; disabled?: boolean };
 type Risk = { path: string; severity: "warning" | "high"; code: string; message: string };
 type DashboardState = {
-  configured: boolean; projectInitialized: boolean; hasLocalCursorConfiguration: boolean; githubConnected: boolean;
+  configured: boolean; projectInitialized: boolean; hasLocalCursorConfiguration: boolean; githubConnected: boolean;   gitlabConnected: boolean; gitlabBaseUrl?: string; gitlabApprovedHosts?: string[];
   manifestStatus: "notChecked" | "empty" | "missing" | "ready" | "invalid" | "pending"; manifestMessage?: string;
   trusted: boolean; workspaceName?: string; source?: Source; repositoryUrl?: string; branch?: string; profile?: string;
   status: "unconfigured" | "synced" | "checking" | "offline" | "error" | "needsReview"; statusMessage: string; lastCheckedAt?: string;
   items: Item[]; incomingCount: number; localCount: number; conflictCount: number; warningCount: number; proposedCount: number; risks: Risk[];
   activeProposal?: { branch: string; compareUrl: string; pullRequest?: { number: number; url: string; state: string } };
-  availableRepositories: AvailableRepository[]; repositoriesStatus: "idle" | "loading" | "ready" | "error"; repositoriesMessage?: string;
+  availableRepositories: AvailableRepository[]; repositoriesStatus: "idle" | "loading" | "ready" | "error"; repositoriesProvider?: "github" | "gitlab"; repositoriesMessage?: string;
   updateCheck: { mode: "off" | "timed" | "events" | "both"; interval: "hourly" | "daily" | "weekly"; onStart: boolean; onFocus: boolean; onDashboardOpen: boolean };
+  folders: Array<{ uri: string; name: string; configured: boolean; status: "unconfigured" | "synced" | "checking" | "offline" | "error" | "needsReview"; incomingCount: number; localCount: number; conflictCount: number }>;
+  selectedFolderUri?: string;
+  legacyWorkspaceSource?: { provider: "github" | "gitlab"; repository: string };
 };
 
 type Command = { type: string; [key: string]: unknown };
 declare function acquireVsCodeApi(): { postMessage(message: Command): void; getState(): unknown; setState(state: unknown): void };
 const vscode = acquireVsCodeApi();
-const empty: DashboardState = { configured: false, projectInitialized: false, hasLocalCursorConfiguration: false, githubConnected: false, manifestStatus: "notChecked", trusted: true, status: "unconfigured", statusMessage: "Initialize RuleSync for this workspace.", items: [], incomingCount: 0, localCount: 0, conflictCount: 0, warningCount: 0, proposedCount: 0, risks: [], availableRepositories: [], repositoriesStatus: "idle", updateCheck: { mode: "both", interval: "daily", onStart: true, onFocus: false, onDashboardOpen: true } };
+const empty: DashboardState = { configured: false, projectInitialized: false, hasLocalCursorConfiguration: false, githubConnected: false, gitlabConnected: false, gitlabApprovedHosts: [], manifestStatus: "notChecked", trusted: true, status: "unconfigured", statusMessage: "Initialize RuleSync for this folder.", items: [], incomingCount: 0, localCount: 0, conflictCount: 0, warningCount: 0, proposedCount: 0, risks: [], availableRepositories: [], repositoriesStatus: "idle", updateCheck: { mode: "both", interval: "daily", onStart: true, onFocus: false, onDashboardOpen: true }, folders: [] };
 const labels: Record<ContentType, string> = { rule: "Rules", hook: "Hooks", skill: "Skills", agent: "Agents", command: "Commands", mcp: "MCP", configuration: "Configuration", other: "Other" };
 const order: ContentType[] = ["rule", "hook", "skill", "agent", "command", "mcp", "configuration", "other"];
 
 function post(message: Command): void { vscode.postMessage(message); }
+
+const Actions = createContext<{ busy?: string; run: (message: Command, key?: string) => void }>({ run: post });
+function useActions(): { busy?: string; run: (message: Command, key?: string) => void } { return useContext(Actions); }
+
+interface ActionButtonProps extends React.ComponentPropsWithoutRef<"button"> {
+  action: Command;
+  actionKey?: string;
+  busyLabel?: string;
+  pending?: boolean;
+}
+
+function ActionButton(props: ActionButtonProps): React.JSX.Element {
+  const { action, actionKey, busyLabel, pending = false, children, className, disabled, type = "button", ...rest } = props;
+  const { busy, run } = useActions();
+  const key = actionKey ?? action.type;
+  const waiting = pending || busy === key;
+
+  return <button type={type} {...rest} className={[className, waiting ? "busy" : ""].filter(Boolean).join(" ")} disabled={disabled || waiting} aria-busy={waiting} onClick={type === "submit" ? undefined : () => run(action, key)}>{waiting && busyLabel ? busyLabel : children}</button>;
+}
+
 function titleCase(value: string): string { return value.charAt(0).toUpperCase() + value.slice(1); }
 function statusLabel(status: Status, kind?: ChangeKind): string {
   if (status === "incoming" && kind === "deleted") return "Removed remotely";
   if (status === "local" && kind === "deleted") return "Deleted locally";
   return { synced: "Synced", incoming: "Incoming", local: "Local", conflict: "Conflict", converged: "Converged", optedOut: "Opted out", proposed: "Proposed" }[status];
 }
-function needsSetup(state: DashboardState): boolean { return !state.projectInitialized || !state.githubConnected || !state.configured; }
-function connectSource(repository: string, ref?: string): void {
-  post({ type: "source.save", source: { id: "team", provider: "github", repository, ref: ref || undefined, profile: "cursor-project", enabled: true } });
+interface FolderBarProps {
+  state: DashboardState;
+}
+
+function FolderBar({ state }: FolderBarProps): React.JSX.Element | null {
+  const { folders, selectedFolderUri } = state;
+  const { run } = useActions();
+  const [open, setOpen] = useState(false);
+  const barRef = useRef<HTMLDivElement>(null);
+  const selected = folders.find(({ uri }) => uri === selectedFolderUri) ?? folders[0];
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointer = ({ target }: MouseEvent) => { if (!barRef.current?.contains(target as Node)) setOpen(false); };
+    const onKey = ({ key }: KeyboardEvent) => { if (key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onPointer); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  useEffect(() => { setOpen(false); }, [selectedFolderUri]);
+
+  if (folders.length <= 1) return null;
+
+  const select = (folderUri: string) => {
+    setOpen(false);
+    if (folderUri !== selectedFolderUri) run({ type: "folder.select", folderUri });
+  };
+
+  return <div className="folderBar" ref={barRef}>
+    <button type="button" className="folderBarTrigger" aria-label="RuleSync folder" aria-haspopup="listbox" aria-expanded={open} aria-controls="folder-bar-menu" onClick={() => setOpen((value) => !value)}>
+      <span className="eyebrow">FOLDER</span>
+      <span className="folderBarCurrent">
+        <strong>{selected?.name ?? "Folder"}</strong>
+        {selected && !selected.configured && <small>Not configured</small>}
+      </span>
+      <svg className="folderBarChevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 6.2 8 10.2 12 6.2" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+    </button>
+
+    {open && <div className="folderBarMenu" id="folder-bar-menu" role="listbox" aria-label="Workspace folders">
+      {folders.map((folder) => {
+        const { uri, name, configured, incomingCount, localCount, conflictCount } = folder;
+        const pending = incomingCount + localCount + conflictCount;
+
+        return <button key={uri} type="button" role="option" aria-selected={uri === selectedFolderUri} className={uri === selectedFolderUri ? "active" : undefined} onClick={() => select(uri)}>
+          <span>{name}</span>
+          {!configured && <small>Not configured</small>}
+          {pending > 0 && <b>{pending}</b>}
+        </button>;
+      })}
+    </div>}
+  </div>;
+}
+
+interface LegacyBannerProps {
+  state: DashboardState;
+}
+
+function LegacyBanner({ state }: LegacyBannerProps): React.JSX.Element | null {
+  const { legacyWorkspaceSource, selectedFolderUri, folders } = state;
+  if (!legacyWorkspaceSource || !selectedFolderUri) return null;
+  const selected = folders.find((folder) => folder.uri === selectedFolderUri);
+
+  return <div className="notice warning" role="status">
+    <span>{legacyWorkspaceNotice(legacyWorkspaceSource, selected?.name ?? "this folder")}</span>
+
+    <div className="legacyActions">
+      <ActionButton className="primary" action={{ type: "workspace.source.assign", folderUri: selectedFolderUri }} busyLabel="Assigning…">Assign to {selected?.name ?? "this folder"}</ActionButton>
+
+      <ActionButton className="secondary" action={{ type: "workspace.source.discard" }}>Discard</ActionButton>
+    </div>
+  </div>;
+}
+
+function sessionReady(state: DashboardState): boolean {
+  if (state.source?.provider === "gitlab") return state.gitlabConnected;
+  if (state.source?.provider === "github") return state.githubConnected;
+  return state.githubConnected || state.gitlabConnected;
+}
+function needsSetup(state: DashboardState): boolean { return !state.projectInitialized || !sessionReady(state) || !state.configured; }
+
+function isGitlab(state: DashboardState, setupProvider?: "github" | "gitlab"): boolean {
+  return (setupProvider ?? state.source?.provider) === "gitlab";
+}
+function hostLabel(state: DashboardState, setupProvider?: "github" | "gitlab"): "GitHub" | "GitLab" {
+  return isGitlab(state, setupProvider) ? "GitLab" : "GitHub";
+}
+function reviewNoun(state: DashboardState, setupProvider?: "github" | "gitlab"): "pull request" | "merge request" {
+  return isGitlab(state, setupProvider) ? "merge request" : "pull request";
+}
+function reviewShort(state: DashboardState, setupProvider?: "github" | "gitlab"): "PR" | "MR" {
+  return isGitlab(state, setupProvider) ? "MR" : "PR";
+}
+
+function proposalActionLabel(state: DashboardState): string {
+  const short = reviewShort(state);
+  return state.activeProposal?.pullRequest ? `Open ${short} on ${hostLabel(state)}` : `Create ${short} on ${hostLabel(state)}`;
 }
 
 interface LogoMarkProps {
@@ -90,28 +208,68 @@ function App(): React.JSX.Element {
   const [filter, setFilter] = useState("");
 
   const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState<string>();
   const [creating, setCreating] = useState(false);
-  const [proposalMessage, setProposalMessage] = useState("chore(rules): propose RuleSync updates");
+  const generatedProposal = useMemo(() => proposalCommitMessage(state.items.filter(({ status }) => status === "local").map(({ path, kind, type }) => ({ path, kind: kind ?? "modified", contentType: type }))), [state.items]);
+  const [proposalMessage, setProposalMessage] = useState(generatedProposal);
+  const [customProposal, setCustomProposal] = useState(false);
+  const lastStatusMessage = useRef(state.statusMessage);
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
+  const run = (message: Command, key = message.type): void => {
+    if (busyRef.current === key) return;
+    if (awaitsHost(message.type)) setBusy(key);
+    post(message);
+  };
 
   useEffect(() => {
     const receive = (event: MessageEvent) => {
-      const message = event.data as { type?: string; state?: DashboardState; message?: string };
-      if (message.type === "state.replace" && message.state) { setState(message.state); setError(undefined); }
-      if (message.type === "operation.error") setError(message.message ?? "RuleSync could not complete that action.");
+      const message = event.data as { type?: string; state?: DashboardState; message?: string; command?: string };
+      if (message.type === "state.replace" && message.state) {
+        setState(message.state);
+        setError(undefined);
+        if (message.state.status !== "checking") setBusy((current) => current === "sync.refresh" ? undefined : current);
+      }
+      if (message.type === "operation.error") { setError(message.message ?? "RuleSync could not complete that action."); setBusy(undefined); }
+      if (message.type === "operation.done") setBusy((current) => matchesBusy(current, message.command) ? undefined : current);
     };
     window.addEventListener("message", receive);
     post({ type: "ready" });
     return () => window.removeEventListener("message", receive);
   }, []);
   useEffect(() => { vscode.setState({ section, filter }); }, [section, filter]);
+  useEffect(() => {
+    if (state.githubConnected) setBusy((current) => current === "auth.start" ? undefined : current);
+    if (state.gitlabConnected) setBusy((current) => current === "gitlab.pat.save" ? undefined : current);
+    if (state.repositoriesStatus === "ready" || state.repositoriesStatus === "error") setBusy((current) => current === "github.repos.refresh" || current === "gitlab.repos.refresh" ? undefined : current);
+  }, [state.githubConnected, state.gitlabConnected, state.repositoriesStatus]);
+  useEffect(() => {
+    const { statusMessage } = state;
+    if (statusMessage.startsWith("Proposal branch is ready") && lastStatusMessage.current !== statusMessage) setSection("overview");
+    lastStatusMessage.current = statusMessage;
+  }, [state.statusMessage]);
+  useEffect(() => { if (!customProposal) setProposalMessage(generatedProposal); }, [generatedProposal, customProposal]);
+  useEffect(() => {
+    const { creating, customProposal, section } = folderSwitchReset();
+    setCreating(creating);
+    setCustomProposal(customProposal);
+    setSection(section);
+  }, [state.selectedFolderUri]);
+
+  const editProposal = (next: string): void => {
+    if (!next.trim()) { setCustomProposal(false); setProposalMessage(generatedProposal); return; }
+    setCustomProposal(true);
+    setProposalMessage(next);
+  };
 
   const { workspaceName, source, status, statusMessage, trusted } = state;
   const { incomingCount, localCount, conflictCount } = state;
   const pending = incomingCount + localCount + conflictCount;
 
-  if (needsSetup(state)) return <GuidedSetup state={state} error={error} />;
+  return <Actions.Provider value={{ busy, run }}>
+    <FolderBar state={state} />
 
-  return <main className="appShell">
+    {needsSetup(state) ? <GuidedSetup key={state.selectedFolderUri ?? "setup"} state={state} error={error} /> : <main className="appShell">
     <header className="appHeader">
       <div className="brand">
         <LogoMark />
@@ -122,7 +280,7 @@ function App(): React.JSX.Element {
         </div>
       </div>
 
-      <button className="iconButton" aria-label="Check for updates" title="Check for updates" onClick={() => post({ type: "sync.refresh" })}>↻</button>
+      <ActionButton className="iconButton" action={{ type: "sync.refresh" }} pending={status === "checking"} aria-label="Check for updates" title="Check for updates"><span className="refreshGlyph" aria-hidden="true">↻</span></ActionButton>
     </header>
 
     <div className={`connection ${status}`}>
@@ -131,6 +289,8 @@ function App(): React.JSX.Element {
     </div>
 
     {!trusted && <div className="notice warning"><b>Workspace trust required.</b> Trust this project before editing, applying, or publishing rules.</div>}
+
+    <LegacyBanner state={state} />
 
     {error && <div className="notice error" role="alert"><span>{error}</span><button onClick={() => setError(undefined)} aria-label="Dismiss">×</button></div>}
 
@@ -142,11 +302,12 @@ function App(): React.JSX.Element {
 
     {section === "overview" && <Overview state={state} go={setSection} />}
     {section === "library" && <Library state={state} filter={filter} setFilter={setFilter} setCreating={setCreating} />}
-    {section === "changes" && <Changes state={state} proposalMessage={proposalMessage} setProposalMessage={setProposalMessage} />}
+    {section === "changes" && <Changes state={state} proposalMessage={proposalMessage} setProposalMessage={editProposal} />}
     {section === "settings" && <Settings state={state} />}
 
     {creating && <CreateDialog onClose={() => setCreating(false)} />}
-  </main>;
+  </main>}
+  </Actions.Provider>;
 }
 
 interface GuidedSetupProps {
@@ -155,17 +316,47 @@ interface GuidedSetupProps {
 }
 
 function GuidedSetup({ state, error }: GuidedSetupProps): React.JSX.Element {
-  const [repository, setRepository] = useState(state.source?.repository ?? "");
-  const [branch, setBranch] = useState(state.source?.ref ?? "main");
+  const initialProvider = defaultSetupProvider(state);
+  const [setupProvider, setSetupProvider] = useState<"github" | "gitlab">(initialProvider);
+  const [repository, setRepository] = useState(state.source?.provider === initialProvider ? state.source.repository : "");
+  const [branch, setBranch] = useState(state.source?.provider === initialProvider ? state.source.ref ?? "main" : "main");
+  const [gitlabKind, setGitlabKind] = useState<"cloud" | "self">(setupGitlabKind(state.source));
+  const [gitlabBaseUrl, setGitlabBaseUrl] = useState(recoveredGitlabUrl(state.source));
+  const [gitlabToken, setGitlabToken] = useState("");
+  const { run } = useActions();
 
-  const { workspaceName, source, configured, items, status, statusMessage } = state;
-  const { githubConnected, projectInitialized, hasLocalCursorConfiguration } = state;
-  const { manifestStatus, manifestMessage, branch: remoteBranch, activeProposal } = state;
+  const { workspaceName, source, items, status, statusMessage, trusted } = state;
+  const { githubConnected, gitlabConnected, projectInitialized, hasLocalCursorConfiguration } = state;
+  const { manifestStatus, branch: remoteBranch } = state;
+  const selectedGitlabHost = gitlabKind === "self" ? gitlabBaseUrl.trim() : "https://gitlab.com";
+  const hostApproved = gitlabKind === "cloud" || hostIsApproved(selectedGitlabHost, state.gitlabApprovedHosts ?? []);
   const projectReady = projectInitialized;
-  const githubReady = githubConnected;
-  const repositoryReady = configured;
+  const gitlabReady = hostApproved && gitlabHostSessionReady({ gitlabConnected, gitlabBaseUrl: state.gitlabBaseUrl }, selectedGitlabHost);
+  const providerReady = setupProvider === "gitlab" ? gitlabReady : githubConnected;
+  const host = hostLabel(state, setupProvider);
+  const repositoryStep = repositorySetupCopy({ source, setupProvider, selectedHost: setupProvider === "gitlab" ? selectedGitlabHost : undefined, hostLabel: host, providerReady });
+  const repositoryReady = repositoryStep.ready;
   const localRules = items.filter((item) => item.type === "rule");
   const projectLabel = workspaceName ? workspaceName.toUpperCase() : "THIS PROJECT";
+  const setupNotice = setupStatusNotice(state, setupProvider, providerReady);
+  const savedGitlabHost = recoveredGitlabUrl(source);
+
+  useEffect(() => {
+    if (source?.provider === setupProvider) {
+      setRepository(source.repository);
+      setBranch(source.ref ?? "main");
+      return;
+    }
+    setRepository("");
+    setBranch("main");
+  }, [setupProvider, source?.provider, source?.repository, source?.ref]);
+
+  useEffect(() => {
+    if (!providerReady) return;
+    post({ type: setupProvider === "gitlab" ? "gitlab.repos.refresh" : "github.repos.refresh" });
+  }, [setupProvider, providerReady]);
+
+  useEffect(() => { if (gitlabConnected) setGitlabToken(""); }, [gitlabConnected]);
 
   return <main className="setupShell">
     <section className="setupHero">
@@ -175,45 +366,75 @@ function GuidedSetup({ state, error }: GuidedSetupProps): React.JSX.Element {
       <p>Keep the project’s Cursor rules, hooks, skills, and automation in one reviewed shared source.</p>
     </section>
 
+    {!trusted && <div className="notice warning"><b>Workspace trust required.</b> Trust this project before connecting a Git host or saving a token.</div>}
+
+    <LegacyBanner state={state} />
+
     {error && <div className="notice error" role="alert">{error}</div>}
 
-    {!error && !githubReady && configured && <div className="notice checking" role="status">{statusMessage || "GitHub sign-in expired. Connect GitHub again."}</div>}
+    {!error && setupNotice && <div className="notice checking" role="status">{setupNotice}</div>}
 
-    {!error && githubReady && status === "checking" && statusMessage && <div className="notice checking" role="status">{statusMessage}</div>}
+    {!error && providerReady && status === "checking" && statusMessage && <div className="notice checking" role="status">{statusMessage}</div>}
 
     <section className="setupSteps" aria-label="RuleSync setup">
-      <SetupStep number="1" title="Activate this workspace" complete={projectReady} description={hasLocalCursorConfiguration ? "Found existing .cursor configuration. RuleSync can bring it under review." : "RuleSync will watch .cursor when you add rules to this project."}>
-        {!projectReady && <button className="primary" onClick={() => post({ type: "workspace.initialize" })}>Initialize RuleSync</button>}
-        {projectReady && <span className="completeText">Workspace ready</span>}
+      <SetupStep number="1" title="Activate this folder" complete={projectReady} description={hasLocalCursorConfiguration ? "Found existing .cursor configuration. RuleSync can bring it under review." : "RuleSync will watch .cursor when you add rules to this folder."}>
+        {!projectReady && <ActionButton className="primary" disabled={!trusted} action={{ type: "workspace.initialize" }} busyLabel="Initializing…">Initialize RuleSync</ActionButton>}
+        {projectReady && <span className="completeText">Folder ready</span>}
       </SetupStep>
 
-      <SetupStep number="2" title="Connect GitHub" complete={githubReady} locked={!projectReady} description={githubReady ? "GitHub is connected securely for this workspace." : configured ? "Your GitHub session expired. Connect again — RuleSync will keep this repository." : "Authorize RuleSync once, then install it on the rules repository if GitHub asks."}>
-        {!githubReady && <>
-          <button className="primary" onClick={() => post({ type: "auth.start" })}>Connect GitHub</button>
-          <button className="secondary" onClick={() => post({ type: "github.app.install" })}>Install on a repository ↗</button>
+      <SetupStep number="2" title={`Connect ${host}`} complete={providerReady} locked={!projectReady} description={connectSetupCopy({ providerReady, setupProvider, gitlabKind, hostApproved, savedHost: savedGitlabHost, hostLabel: host, configured: Boolean(source) })}>
+        <div className="choiceRow" role="radiogroup" aria-label="Rules provider">
+          <button type="button" className={setupProvider === "github" ? "choice active" : "choice"} onClick={() => setSetupProvider("github")}>GitHub</button>
+          <button type="button" className={setupProvider === "gitlab" && gitlabKind === "cloud" ? "choice active" : "choice"} onClick={() => { setSetupProvider("gitlab"); setGitlabKind("cloud"); }}>GitLab.com</button>
+          <button type="button" className={setupProvider === "gitlab" && gitlabKind === "self" ? "choice active" : "choice"} onClick={() => { setSetupProvider("gitlab"); setGitlabKind("self"); if (!gitlabBaseUrl.trim()) setGitlabBaseUrl(recoveredGitlabUrl(source)); }}>Self-hosted GitLab</button>
+        </div>
+        {setupProvider === "github" && !providerReady && <>
+          {statusMessage.startsWith("Waiting for GitHub") && <p className="repoHint">{statusMessage}</p>}
+
+          <ActionButton className="primary" disabled={!trusted} action={{ type: "auth.start" }} busyLabel="Waiting for GitHub…">Sign in with GitHub</ActionButton>
         </>}
-        {githubReady && <span className="completeText">Connected</span>}
+        {setupProvider === "gitlab" && !providerReady && <form className="patForm" onSubmit={(event) => {
+          event.preventDefault();
+          if (!hostApproved) return;
+          run({ type: "gitlab.pat.save", baseUrl: selectedGitlabHost, token: gitlabToken });
+        }}>
+          {gitlabKind === "self" && <label>GitLab URL<input value={gitlabBaseUrl} onChange={(event) => setGitlabBaseUrl(event.target.value)} placeholder="https://gitlab.example.com" autoComplete="url" /></label>}
+
+          {gitlabKind === "self" && !hostApproved && <ActionButton className="primary" disabled={!trusted || !gitlabBaseUrl.trim()} action={{ type: "gitlab.host.approve", baseUrl: gitlabBaseUrl }} busyLabel="Confirming…">Confirm {gitlabBaseUrl.trim() || "host"}</ActionButton>}
+
+          {hostApproved && <label>Personal access token<input type="password" value={gitlabToken} onChange={(event) => setGitlabToken(event.target.value)} autoComplete="off" required /></label>}
+
+          {hostApproved && <aside className="tokenGuide" aria-label="GitLab token access">
+            <strong>What the token must allow</strong>
+            <p>On GitLab: avatar → Edit profile → Access → Personal access tokens. Enable <code>api</code> (Legacy token on current GitLab). That one scope is enough for RuleSync to:</p>
+            <ul>
+              <li>List projects you can write to</li>
+              <li>Read <code>.cursor</code> rules, hooks, and skills</li>
+              <li>Publish a proposal branch</li>
+              <li>Open a merge request</li>
+            </ul>
+            <p>Developer role on the rules project is enough. Leave admin and sudo off. <code>read_api</code> or repository-only scopes cannot create merge requests.</p>
+            <button type="button" onClick={() => post({ type: "gitlab.pat.help", baseUrl: selectedGitlabHost })}>Create a token with api selected</button>
+          </aside>}
+
+          {hostApproved && <ActionButton className="primary" type="submit" disabled={!trusted || !gitlabToken.trim()} action={{ type: "gitlab.pat.save", baseUrl: selectedGitlabHost, token: gitlabToken }} busyLabel="Checking token…">Save token</ActionButton>}
+        </form>}
+        {providerReady && <span className="completeText">Connected</span>}
+
+        {providerReady && setupProvider === "github" && <ActionButton className="secondary" action={{ type: "auth.forget" }} busyLabel="Disconnecting…">Disconnect GitHub</ActionButton>}
+
+        {providerReady && setupProvider === "gitlab" && <ActionButton className="secondary" action={{ type: "gitlab.pat.forget", baseUrl: selectedGitlabHost }} busyLabel="Forgetting…">Use a different token</ActionButton>}
       </SetupStep>
 
-      <SetupStep number="3" title="Choose the shared rules repository" complete={repositoryReady} locked={!githubReady} description={repositoryReady ? `${source?.repository} is connected to this project.` : "Pick a repository RuleSync can already access, or install the app on another one."}>
-        {githubReady && !repositoryReady && <RepositoryPicker state={state} repository={repository} setRepository={setRepository} branch={branch} setBranch={setBranch} />}
+      <SetupStep number="3" title="Choose the shared rules repository" complete={repositoryReady} locked={!providerReady} description={repositoryStep.description}>
+        {providerReady && !repositoryReady && <RepositoryPicker state={state} repository={repository} setRepository={setRepository} branch={branch} setBranch={setBranch} setupProvider={setupProvider} gitlabBaseUrl={selectedGitlabHost} />}
         {repositoryReady && <span className="completeText">Repository connected</span>}
       </SetupStep>
 
-      {repositoryReady && manifestStatus === "empty" && <SetupStep number="4" title="This repository has no main" description={`${source?.repository ?? "This repository"} has no ${remoteBranch ?? "main"} branch. RuleSync can create it for you.`}>
-        <button className="primary" onClick={() => post({ type: "manifest.initialize" })}>Create it for me</button>
-      </SetupStep>}
+      {repositoryReady && manifestStatus === "empty" && <SetupStep number="4" title={emptyRepositoryCopy({ repository: source?.repository, branch: remoteBranch, host }).title} description={emptyRepositoryCopy({ repository: source?.repository, branch: remoteBranch, host }).description}>
+        {state.repositoryUrl && <a className="secondary" href={state.repositoryUrl}>{`Open ${source?.repository} on ${host}`}</a>}
 
-      {repositoryReady && manifestStatus === "missing" && <SetupStep number="4" title="Initialize the rules repository" description="This repository has no rulesync.yml yet. Create the starter file on a proposal branch, then make the pull request on GitHub.">
-        <button className="primary" onClick={() => post({ type: "manifest.initialize" })}>Create rulesync.yml branch</button>
-      </SetupStep>}
-
-      {repositoryReady && manifestStatus === "pending" && <SetupStep number="4" title="Merge the manifest pull request" complete description={manifestMessage ?? "The starter manifest is ready."}>
-        <button className="primary" onClick={() => post({ type: "proposal.openCompare" })}>{activeProposal?.pullRequest ? "Open pull request" : "Open GitHub and create PR"}</button>
-      </SetupStep>}
-
-      {repositoryReady && manifestStatus === "invalid" && <SetupStep number="4" title="Fix rulesync.yml" description={manifestMessage ?? "The remote manifest needs attention."}>
-        <button className="secondary" onClick={() => post({ type: "sync.refresh" })}>Check again</button>
+        <ActionButton className="primary" action={{ type: "sync.refresh" }} busyLabel="Checking…">Check again</ActionButton>
       </SetupStep>}
     </section>
 
@@ -227,7 +448,7 @@ function GuidedSetup({ state, error }: GuidedSetupProps): React.JSX.Element {
       </ul>
     </section>}
 
-    <p className="setupFooter">RuleSync never writes to your main branch. Every shared change is reviewed through GitHub.</p>
+    <p className="setupFooter">All RuleSync remote writes target proposal branches only.</p>
   </main>;
 }
 
@@ -259,51 +480,54 @@ interface RepositoryPickerProps {
   setRepository: (value: string) => void;
   branch: string;
   setBranch: (value: string) => void;
+  setupProvider: "github" | "gitlab";
+  gitlabBaseUrl?: string;
 }
 
 function RepositoryPicker(props: RepositoryPickerProps): React.JSX.Element {
-  const { state, repository, setRepository, branch, setBranch } = props;
+  const { state, repository, setRepository, branch, setBranch, setupProvider, gitlabBaseUrl } = props;
   const [filter, setFilter] = useState("");
 
-  const { availableRepositories, repositoriesStatus, repositoriesMessage } = state;
-  const repos = availableRepositories ?? [];
+  const { availableRepositories, repositoriesStatus, repositoriesMessage, repositoriesProvider } = state;
+  const listing = repositoriesStatus === "loading" && repositoriesProvider === setupProvider;
+  const repos = visibleSetupRepos({ setupProvider, repositoriesProvider, repositories: availableRepositories ?? [] });
   const visible = repos.filter(({ repository: name }) => name.toLowerCase().includes(filter.toLowerCase()));
 
   return <>
-    {repositoriesStatus === "loading" && <p className="repoHint">Loading repositories…</p>}
+    {repositoriesStatus === "error" && repositoriesProvider === setupProvider && <p className="repoHint">{repositoriesMessage ?? "Could not load repositories."}</p>}
 
-    {repositoriesStatus === "error" && <p className="repoHint">{repositoriesMessage ?? "Could not load repositories."}</p>}
-
-    {repositoriesStatus === "ready" && !repos.length && <p className="repoHint">No repositories yet. Install RuleSync on a rules repo, then refresh this list.</p>}
+    {repositoriesStatus === "ready" && repositoriesProvider === setupProvider && !repos.length && <p className="repoHint">{setupProvider === "gitlab" ? "No projects yet. Create a GitLab project the token can access, then refresh this list." : "No repositories yet. Install RuleSync on a rules repo, then refresh this list."}</p>}
 
     {repos.length > 3 && <SearchField label="Filter repositories" value={filter} onChange={setFilter} placeholder="Filter repositories" />}
+
+    {visible.length > 0 && <p className="repoHint">Click a repository to connect it to this folder.</p>}
 
     {visible.length > 0 && <div className="repoList">
       {visible.map((item) => {
         const { repository: name, private: isPrivate, defaultBranch } = item;
 
-        return <button key={name} className="repoChoice" type="button" onClick={() => connectSource(name, defaultBranch)}>
+        return <ActionButton key={name} className="repoChoice" action={{ type: "source.save", source: { id: "team", provider: setupProvider, repository: name, ref: defaultBranch || undefined, profile: "cursor-project", enabled: true, ...(setupProvider === "gitlab" ? { baseUrl: gitlabBaseUrl } : {}) } }} actionKey={`source.save:${name}`} busyLabel="Using repository…" aria-label={`Use ${name}`}>
           <span className="fileCopy">
             <strong>{name}</strong>
             <small>{isPrivate ? "Private" : "Public"} · {defaultBranch}</small>
           </span>
-          <span className="repoUse">Use</span>
-        </button>;
+          <span className="repoUse">Use this repository</span>
+        </ActionButton>;
       })}
     </div>}
 
     <div className="repoPickerActions">
-      <button className="secondary" onClick={() => post({ type: "github.app.install" })}>Install on a repository ↗</button>
+      {setupProvider === "github" && <button className="secondary" onClick={() => post({ type: "github.app.install" })}>Install on a repository ↗</button>}
 
-      <button className="secondary" onClick={() => post({ type: "github.repos.refresh" })}>Refresh list</button>
+      <ActionButton className="secondary" action={{ type: setupProvider === "gitlab" ? "gitlab.repos.refresh" : "github.repos.refresh" }} pending={listing}>Refresh list</ActionButton>
     </div>
 
     <details className="customRepo">
       <summary>Use a custom repository</summary>
       <div className="repoForm">
-        <label>Repository<input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder="acme/ai-editor-rules" /></label>
+        <label>Repository<input value={repository} onChange={(event) => setRepository(event.target.value)} placeholder={setupProvider === "gitlab" ? "group/sub/project" : "acme/ai-editor-rules"} /></label>
         <label>Branch<input value={branch} onChange={(event) => setBranch(event.target.value)} placeholder="main" /></label>
-        <button className="primary" disabled={!repository} onClick={() => connectSource(repository, branch)}>Connect repository</button>
+        <ActionButton className="primary" disabled={!repository} action={{ type: "source.save", source: { id: "team", provider: setupProvider, repository, ref: branch || undefined, profile: "cursor-project", enabled: true, ...(setupProvider === "gitlab" ? { baseUrl: gitlabBaseUrl } : {}) } }} actionKey={`source.save:${repository}`} busyLabel="Connecting…">Connect repository</ActionButton>
       </div>
     </details>
   </>;
@@ -316,20 +540,18 @@ interface OverviewProps {
 
 function Overview({ state, go }: OverviewProps): React.JSX.Element {
   const { manifestStatus, source, branch, items, incomingCount, localCount, conflictCount } = state;
-  const { workspaceName, activeProposal, manifestMessage } = state;
+  const { workspaceName, activeProposal, repositoryUrl } = state;
   const changed = incomingCount + localCount + conflictCount;
-  const repo = source?.repository ?? "This repository";
-  const ref = branch ?? "main";
+  const localDeletes = items.filter(({ status, kind }) => status === "local" && kind === "deleted").length;
+  const emptyCopy = emptyRepositoryCopy({ repository: source?.repository, branch, host: hostLabel(state) });
   const pullRequest = activeProposal?.pullRequest;
 
   return <section className="content overview">
-    {manifestStatus === "empty" && <PageHeader variant="prompt" eyebrow="NO MAIN BRANCH" title={`${repo} has no ${ref}.`} description={`RuleSync can create empty ${ref} for you. After that you can open pull requests.`} action={<button className="primary" onClick={() => post({ type: "manifest.initialize" })}>Create it for me</button>} />}
+    {manifestStatus === "empty" && <PageHeader variant="prompt" eyebrow="NO DEFAULT BRANCH" title={emptyCopy.title} description={emptyCopy.description} action={<ActionButton className="primary" action={{ type: "sync.refresh" }} busyLabel="Checking…">Check again</ActionButton>} />}
 
-    {manifestStatus === "missing" && <PageHeader variant="prompt" eyebrow="REPOSITORY SETUP" title="One small file away from syncing." description="Initialize rulesync.yml on a proposal branch, then merge it on GitHub." action={<button className="primary" onClick={() => post({ type: "manifest.initialize" })}>Initialize repository</button>} />}
+    {manifestStatus === "empty" && repositoryUrl && <p><a href={repositoryUrl}>{`Open ${source?.repository} on ${hostLabel(state)}`}</a></p>}
 
-    {manifestStatus === "pending" && <PageHeader variant="prompt" eyebrow="AWAITING MERGE" title="Manifest branch is ready." description={manifestMessage} action={<button className="primary" onClick={() => post({ type: "proposal.openCompare" })}>{pullRequest ? "Open pull request" : "Open GitHub"}</button>} />}
-
-    <PageHeader variant="hero" eyebrow="PROJECT STATUS" title={changed ? "Rules need your attention" : items.length ? "Your rules are in sync" : `No managed files in ${workspaceName ?? "this workspace"}`} description={changed ? "Review the changes before they affect the project." : items.length ? "Edit a rule or add a new one whenever the team needs it." : `RuleSync is watching ${workspaceName ?? "this folder"}. Add files under .cursor, then open Library.`} action={<button className="softButton" onClick={() => go(changed ? "changes" : "library")}>{changed ? "Review changes →" : "Browse rules →"}</button>} />
+    <PageHeader variant="hero" eyebrow="PROJECT STATUS" title={changed ? "Rules need your attention" : items.length ? "Your rules are in sync" : `No managed files in ${workspaceName ?? "this folder"}`} description={changed ? "Review the changes before they affect the project." : items.length ? "Edit a rule or add a new one whenever the team needs it." : `RuleSync is watching ${workspaceName ?? "this folder"}. Add files under .cursor, then open Library.`} action={<button className="softButton" onClick={() => go(changed ? "changes" : "library")}>{changed ? "Review changes →" : "Browse rules →"}</button>} />
 
     <div className="metricGrid">
       <Metric value={items.length} label="Managed files" />
@@ -341,15 +563,15 @@ function Overview({ state, go }: OverviewProps): React.JSX.Element {
     {activeProposal && <div className="proposalCard">
       <div className="proposalIcon">↗</div>
       <div>
-        <strong>{pullRequest ? "Pull request detected" : "Proposal branch ready"}</strong>
+        <strong>{pullRequest ? `${titleCase(reviewNoun(state))} detected` : "Proposal branch ready"}</strong>
         <span>{pullRequest ? `#${pullRequest.number}` : activeProposal.branch}</span>
       </div>
-      <button className="secondary" onClick={() => post({ type: "proposal.openCompare" })}>{pullRequest ? "Open PR" : "Create PR"}</button>
+      <ActionButton className="primary" action={{ type: "proposal.openCompare" }} busyLabel={`Opening ${hostLabel(state)}…`}>{proposalActionLabel(state)}</ActionButton>
     </div>}
 
     <div className="nextAction">
       <span>Next best action</span>
-      <strong>{conflictCount ? "Resolve conflicts" : incomingCount ? "Review remote updates" : localCount ? "Publish local changes" : "Create or edit a rule"}</strong>
+      <strong>{conflictCount ? "Resolve conflicts" : incomingCount ? "Review remote updates" : localCount && localDeletes === localCount ? "Restore deleted files from remote" : localCount ? "Publish local changes" : "Create or edit a rule"}</strong>
     </div>
   </section>;
 }
@@ -398,35 +620,109 @@ function Library(props: LibraryProps): React.JSX.Element {
   </section>;
 }
 
+interface MenuAction {
+  label: string;
+  action: Command;
+  actionKey?: string;
+  danger?: boolean;
+}
+
+type MenuEntry = MenuAction | { separator: true };
+
+function itemMenuEntries(item: Item, conflict = false): MenuEntry[] {
+  const { path, status, kind, disabled } = item;
+  const removed = kind === "deleted";
+  const groups: MenuAction[][] = [[{ label: "Compare", action: { type: "content.diff", path, comparison: status === "incoming" ? "remote" : "base" } }]];
+  const sync: MenuAction[] = [];
+  if (conflict) {
+    sync.push({ label: "Keep local", action: { type: "conflict.resolve", path, resolution: "local" }, actionKey: `conflict.resolve:${path}:local` });
+    sync.push({ label: "Use remote", action: { type: "conflict.resolve", path, resolution: "remote" }, actionKey: `conflict.resolve:${path}:remote` });
+  }
+  if (status === "incoming") sync.push({ label: removed ? "Apply deletion" : "Pull", action: { type: "remote.apply", path }, actionKey: `remote.apply:${path}`, danger: removed });
+  if (status === "local") sync.push({ label: removed ? "Restore" : "Revert", action: { type: "content.revert", path }, actionKey: `content.revert:${path}` });
+  if (sync.length) groups.push(sync);
+  if (canToggleLocalDisable({ path, status, kind })) groups.push([{ label: disabled ? "Enable" : "Disable", action: { type: disabled ? "content.enable" : "content.disable", path } }]);
+  if (!removed) groups.push([{ label: "Rename", action: { type: "content.rename", path } }, { label: "Delete", action: { type: "content.delete", path }, danger: true }]);
+  return groups.flatMap((group, index) => index ? [{ separator: true as const }, ...group] : group);
+}
+
+interface ItemMenuProps {
+  x: number;
+  y: number;
+  entries: MenuEntry[];
+  anchor: React.RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}
+
+function ItemMenu({ x, y, entries, anchor, onClose }: ItemMenuProps): React.JSX.Element {
+  const { busy, run } = useActions();
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onPointer = ({ target }: MouseEvent) => {
+      const node = target as Node;
+      if (ref.current?.contains(node) || anchor.current?.contains(node)) return;
+      onClose();
+    };
+    const onKey = ({ key }: KeyboardEvent) => { if (key === "Escape") onClose(); };
+    document.addEventListener("mousedown", onPointer);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onPointer);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [anchor, onClose]);
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    if (!node) return;
+    const { width, height } = node.getBoundingClientRect();
+    const left = Math.max(8, Math.min(x - width, window.innerWidth - width - 8));
+    const top = y + height > window.innerHeight - 8 ? Math.max(8, y - height - 4) : y + 4;
+    node.style.left = `${left}px`;
+    node.style.top = `${top}px`;
+  }, [x, y]);
+
+  return createPortal(<div ref={ref} className="itemMenu" role="menu" style={{ left: x, top: y }}>
+    {entries.map((entry, index) => {
+      if ("separator" in entry) return <div key={`sep:${index}`} className="itemMenuSep" role="separator" />;
+      const { label, action, actionKey, danger } = entry;
+      const key = actionKey ?? `${action.type}:${label}`;
+
+      return <button key={key} type="button" role="menuitem" className={danger ? "dangerText" : undefined} disabled={busy === key} onClick={() => { run(action, key); onClose(); }}>{label}</button>;
+    })}
+  </div>, document.body);
+}
+
+function toggleItemMenu(event: React.MouseEvent<HTMLButtonElement>, open: { x: number; y: number } | undefined, setOpen: (next: { x: number; y: number } | undefined) => void): void {
+  if (open) { setOpen(undefined); return; }
+  const { bottom, right } = event.currentTarget.getBoundingClientRect();
+  setOpen({ x: right, y: bottom });
+}
+
 interface FileRowProps {
   item: Item;
 }
 
 function FileRow({ item }: FileRowProps): React.JSX.Element {
-  const [menu, setMenu] = useState(false);
-  const { path, name, type, status, kind, detail } = item;
+  const [menu, setMenu] = useState<{ x: number; y: number }>();
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const { path, name, type, status, kind, detail, disabled } = item;
   const removed = kind === "deleted";
 
   return <article className="fileRow">
     <button className="fileMain" onClick={() => post({ type: "content.open", path })}>
       <span className="fileGlyph">{type === "rule" ? "✦" : type === "hook" ? "⌁" : type === "skill" ? "◇" : "•"}</span>
       <span className="fileCopy"><strong>{name}</strong><small>{detail}</small></span>
-      <span className={`badge ${status}${removed ? " deleted" : ""}`}>{statusLabel(status, kind)}</span>
+      <span className="fileBadges">
+        {disabled && <span className="badge disabled">Disabled</span>}
+        <span className={`badge ${status}${removed ? " deleted" : ""}`}>{statusLabel(status, kind)}</span>
+      </span>
     </button>
 
-    <button type="button" className="fileMore" aria-label={`Actions for ${name}`} aria-expanded={menu} onClick={() => setMenu((open) => !open)}>⋯</button>
+    <button ref={moreRef} type="button" className="fileMore" aria-label={`Actions for ${name}`} aria-haspopup="menu" aria-expanded={Boolean(menu)} onClick={(event) => toggleItemMenu(event, menu, setMenu)}>⋯</button>
 
-    {menu && <div className="fileActions">
-      <button onClick={() => post({ type: "content.diff", path, comparison: status === "incoming" ? "remote" : "base" })}>Compare</button>
-
-      {status === "incoming" && <button onClick={() => post({ type: "remote.apply", path })}>{removed ? "Apply deletion" : "Pull"}</button>}
-
-      {status === "local" && <button onClick={() => post({ type: "content.revert", path })}>Revert</button>}
-
-      <button onClick={() => post({ type: "content.rename", path })}>Rename</button>
-
-      <button className="dangerText" onClick={() => post({ type: "content.delete", path })}>Delete</button>
-    </div>}
+    {menu && <ItemMenu x={menu.x} y={menu.y} entries={itemMenuEntries(item)} anchor={moreRef} onClose={() => setMenu(undefined)} />}
   </article>;
 }
 
@@ -438,22 +734,44 @@ interface ChangesProps {
 
 function Changes(props: ChangesProps): React.JSX.Element {
   const { state, proposalMessage, setProposalMessage } = props;
-  const { items, risks, manifestStatus, source, branch, activeProposal } = state;
+  const { items, risks, manifestStatus, source, branch, activeProposal, repositoryUrl } = state;
   const incoming = items.filter((item) => item.status === "incoming");
   const local = items.filter((item) => item.status === "local");
   const conflicts = items.filter((item) => item.status === "conflict");
   const emptyRepo = manifestStatus === "empty";
-  const title = emptyRepo ? "Create main first" : conflicts.length ? "Resolve conflicts" : incoming.length ? "Review remote updates" : local.length ? "Review local changes" : "Nothing to review";
-  const description = emptyRepo ? `${source?.repository ?? "This repository"} has no ${branch ?? "main"} branch. RuleSync can create it for you.` : "Open a native diff for every file before applying or publishing changes.";
+  const onlyLocalDeletes = !conflicts.length && !incoming.length && local.length > 0 && local.every(({ kind }) => kind === "deleted");
+  const { high, warnings } = splitRisks(risks);
+  const emptyCopy = emptyRepositoryCopy({ repository: source?.repository, branch, host: hostLabel(state) });
+  const title = emptyRepo ? emptyCopy.title : conflicts.length ? "Resolve conflicts" : incoming.length ? "Review remote updates" : local.length ? "Review local changes" : "Nothing to review";
+  const description = emptyRepo ? emptyCopy.description : "Open a native diff for every file before applying or publishing changes.";
 
   return <section className="content changes">
     <PageHeader eyebrow="REVIEW QUEUE" title={title} description={description} />
 
-    {emptyRepo && <button className="primary wide" onClick={() => post({ type: "manifest.initialize" })}>Create it for me</button>}
+    {emptyRepo && repositoryUrl && <a className="secondary" href={repositoryUrl}>{`Open ${source?.repository} on ${hostLabel(state)}`}</a>}
 
-    {risks.length > 0 && <div className="riskList">
+    {emptyRepo && <ActionButton className="primary wide" action={{ type: "sync.refresh" }} busyLabel="Checking…">Check again</ActionButton>}
+
+    {high.length > 0 && <div className="riskList">
+      <strong>High-risk files need a per-file accept</strong>
+      {high.map((risk) => {
+        const { path, code, message } = risk;
+
+        return <div key={`${path}-${code}`} className="risk">
+          <span>!</span>
+          <div><code>{path}</code><small>{message}</small></div>
+          <div className="riskActions">
+            <button onClick={() => post({ type: "content.diff", path, comparison: "remote" })}>Review Diff</button>
+
+            <ActionButton action={{ type: "risk.accept", path, code }} actionKey={`risk.accept:${path}:${code}`} busyLabel="Accepting…">Accept</ActionButton>
+          </div>
+        </div>;
+      })}
+    </div>}
+
+    {warnings.length > 0 && <div className="riskList">
       <strong>Safety review required</strong>
-      {risks.map((risk) => {
+      {warnings.map((risk) => {
         const { path, code, message } = risk;
 
         return <div key={`${path}-${code}`} className="risk">
@@ -461,19 +779,24 @@ function Changes(props: ChangesProps): React.JSX.Element {
           <div><code>{path}</code><small>{message}</small></div>
         </div>;
       })}
-      <button className="secondary" onClick={() => post({ type: "risks.accept" })}>Accept these files</button>
+      <ActionButton className="secondary" action={{ type: "risks.accept" }} busyLabel="Accepting…">Accept these files</ActionButton>
     </div>}
 
     <ChangeGroup title="Conflicts" items={conflicts} conflict />
-    <ChangeGroup title="Incoming from GitHub" items={incoming} />
+    <ChangeGroup title={`Incoming from ${hostLabel(state)}`} items={incoming} />
     <ChangeGroup title="Changed in this project" items={local} />
 
-    {!emptyRepo && !conflicts.length && incoming.length > 0 && <button className="primary wide" onClick={() => post({ type: "remote.applyAll" })}>Apply {incoming.length} remote change{incoming.length === 1 ? "" : "s"}</button>}
+    {!emptyRepo && !conflicts.length && incoming.length > 0 && <ActionButton className="primary wide" action={{ type: "remote.applyAll" }} busyLabel="Applying…">Apply {incoming.length} remote change{incoming.length === 1 ? "" : "s"}</ActionButton>}
+
+    {!emptyRepo && (local.length > 0 || incoming.length > 0 || conflicts.length > 0) && <ActionButton className={onlyLocalDeletes ? "primary wide" : "secondary wide"} action={{ type: "remote.restore" }} busyLabel="Restoring…">Restore from remote</ActionButton>}
 
     {!emptyRepo && !conflicts.length && !incoming.length && local.length > 0 && <div className="publishPanel">
       <label>Commit message<input value={proposalMessage} onChange={(event) => setProposalMessage(event.target.value)} /></label>
-      <button className="primary wide" onClick={() => post({ type: "proposal.publish", message: proposalMessage })}>{activeProposal ? "Update proposal branch" : "Publish proposal branch"}</button>
-      <small>RuleSync publishes a branch. You create the final pull request on GitHub.</small>
+      <ActionButton className="primary wide" action={{ type: "proposal.publish", message: proposalMessage }} busyLabel={activeProposal ? "Updating…" : "Publishing…"}>{activeProposal ? "Update proposal branch" : "Publish proposal branch"}</ActionButton>
+
+      {activeProposal && <ActionButton className="primary wide" action={{ type: "proposal.openCompare" }} busyLabel={`Opening ${hostLabel(state)}…`}>{proposalActionLabel(state)}</ActionButton>}
+
+      <small>All RuleSync remote writes target proposal branches only. You create the final {reviewNoun(state)} on {hostLabel(state)}.</small>
     </div>}
 
     {!emptyRepo && !conflicts.length && !incoming.length && !local.length && <div className="empty">
@@ -494,25 +817,31 @@ function ChangeGroup({ title, items, conflict = false }: ChangeGroupProps): Reac
 
   return <div className="changeGroup">
     <h3>{title}<span>{items.length}</span></h3>
-    {items.map((item) => {
-      const { path, name, status, kind } = item;
+    {items.map((item) => <ChangeRow key={item.path} item={item} conflict={conflict} />)}
+  </div>;
+}
 
-      return <div key={path} className="change">
-        <button onClick={() => post({ type: "content.diff", path, comparison: status === "incoming" ? "remote" : "base" })}>
-          <strong>{name}</strong>
-          <small>{path}</small>
-        </button>
-        {conflict && <div>
-          <button onClick={() => post({ type: "conflict.resolve", path, resolution: "local" })}>Keep local</button>
+interface ChangeRowProps {
+  item: Item;
+  conflict?: boolean;
+}
 
-          <button onClick={() => post({ type: "conflict.resolve", path, resolution: "remote" })}>Use remote</button>
-        </div>}
+function ChangeRow({ item, conflict = false }: ChangeRowProps): React.JSX.Element {
+  const [menu, setMenu] = useState<{ x: number; y: number }>();
+  const moreRef = useRef<HTMLButtonElement>(null);
+  const { path, name, status, kind } = item;
 
-        {!conflict && status === "incoming" && <div>
-          <button onClick={() => post({ type: "remote.apply", path })}>{kind === "deleted" ? "Apply deletion" : "Pull"}</button>
-        </div>}
-      </div>;
-    })}
+  return <div className="change">
+    <button onClick={() => post({ type: "content.diff", path, comparison: status === "incoming" ? "remote" : "base" })}>
+      <strong>{name}</strong>
+      <small>{path}</small>
+    </button>
+
+    <span className={`badge ${status}${kind === "deleted" ? " deleted" : ""}`}>{statusLabel(status, kind)}</span>
+
+    <button ref={moreRef} type="button" className="fileMore" aria-label={`Actions for ${name}`} aria-haspopup="menu" aria-expanded={Boolean(menu)} onClick={(event) => toggleItemMenu(event, menu, setMenu)}>⋯</button>
+
+    {menu && <ItemMenu x={menu.x} y={menu.y} entries={itemMenuEntries(item, conflict)} anchor={moreRef} onClose={() => setMenu(undefined)} />}
   </div>;
 }
 
@@ -527,17 +856,17 @@ function Settings({ state }: SettingsProps): React.JSX.Element {
   const events = check.mode === "events" || check.mode === "both";
 
   return <section className="content settings">
-    <PageHeader eyebrow="CONNECTION" title="Workspace settings" description="Repository, update checks, and GitHub access." />
+    <PageHeader eyebrow="CONNECTION" title="Folder settings" description={`This folder’s repository, editor-wide update checks, and ${hostLabel(state)} access.`} />
 
     <div className="settingCard">
       <span>Repository</span>
       <strong>{source?.repository}</strong>
-      <small>Profile: {profile} · Branch: {branch ?? "default"}</small>
+      <small>Profile: {profile} · Branch: {branch ?? "default"}{source?.provider === "gitlab" ? ` · ${source.baseUrl ?? "https://gitlab.com"}` : ""}</small>
     </div>
 
     <div className="settingCard">
       <span>Check for updates</span>
-      <strong>When RuleSync looks at GitHub</strong>
+      <strong>When RuleSync looks at the connected source</strong>
       <div className="choiceRow" role="group" aria-label="Update check mode">
         {([["off", "Off"], ["timed", "Schedule"], ["events", "Events"], ["both", "Both"]] as const).map(([value, label]) =>
           <button key={value} type="button" className={check.mode === value ? "choice active" : "choice"} onClick={() => save({ ...check, mode: value })}>{label}</button>
@@ -556,22 +885,22 @@ function Settings({ state }: SettingsProps): React.JSX.Element {
         <label className="tick"><input type="checkbox" checked={check.onDashboardOpen} onChange={(event) => save({ ...check, onDashboardOpen: event.target.checked })} /><span>When you open RuleSync</span></label>
       </div>}
       <small>{lastCheckedAt ? `Last checked ${new Date(lastCheckedAt).toLocaleString()}` : "Not checked yet."}</small>
-      <button className="secondary" onClick={() => post({ type: "sync.refresh" })}>Check now</button>
+      <ActionButton className="secondary" action={{ type: "sync.refresh" }} busyLabel="Checking…">Check now</ActionButton>
     </div>
 
-    <div className="settingCard">
+    {source?.provider !== "gitlab" && <div className="settingCard">
       <span>GitHub App</span>
       <small>Install RuleSync on another rules repository.</small>
       <button className="secondary" onClick={() => post({ type: "github.app.install" })}>Install on a repository ↗</button>
-    </div>
+    </div>}
 
-    <div className="settingCard">
-      <span>Advanced options</span>
-      <small>Opt-outs and GitHub App configuration are available in editor settings.</small>
-      <button className="secondary" onClick={() => post({ type: "settings.open" })}>Open settings</button>
-    </div>
+    {source?.provider === "gitlab" && <div className="settingCard">
+      <span>GitLab access</span>
+      <small>Forget the personal access token for {state.gitlabBaseUrl ?? source.baseUrl ?? "https://gitlab.com"}.</small>
+      <ActionButton className="secondary" action={{ type: "gitlab.pat.forget", baseUrl: state.gitlabBaseUrl ?? source.baseUrl }} busyLabel="Forgetting…">Forget GitLab token</ActionButton>
+    </div>}
 
-    <button className="danger wide" onClick={() => post({ type: "source.disconnect" })}>Disconnect repository</button>
+    <ActionButton className="danger wide" action={{ type: "source.disconnect" }} busyLabel="Disconnecting…">Disconnect repository</ActionButton>
   </section>;
 }
 
@@ -580,6 +909,7 @@ interface CreateDialogProps {
 }
 
 function CreateDialog({ onClose }: CreateDialogProps): React.JSX.Element {
+  const { busy, run } = useActions();
   const [type, setType] = useState<ContentType>("rule");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -587,11 +917,14 @@ function CreateDialog({ onClose }: CreateDialogProps): React.JSX.Element {
   const [ruleMode, setRuleMode] = useState<"always" | "auto" | "agent" | "manual">("always");
   const [globs, setGlobs] = useState("");
   const [relativePath, setRelativePath] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+
+  useEffect(() => { if (submitted && busy !== "content.create") onClose(); }, [submitted, busy, onClose]);
 
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
-    post({ type: "content.create", request: { type, name, description, ruleMode, globs, relativePath } });
-    onClose();
+    setSubmitted(true);
+    run({ type: "content.create", request: { type, name, description, ruleMode, globs, relativePath } });
   };
 
   return <div className="modalBackdrop" role="presentation">
@@ -631,7 +964,7 @@ function CreateDialog({ onClose }: CreateDialogProps): React.JSX.Element {
       <footer>
         <button type="button" className="secondary" onClick={onClose}>Cancel</button>
 
-        <button className="primary" type="submit">Create</button>
+        <ActionButton className="primary" type="submit" action={{ type: "content.create", request: { type, name, description, ruleMode, globs, relativePath } }} busyLabel="Creating…">Create</ActionButton>
       </footer>
     </form>
   </div>;

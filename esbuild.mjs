@@ -9,7 +9,7 @@ const options = {
   target: "node20",
   format: "cjs",
   external: ["vscode"],
-  sourcemap: true,
+  sourcemap: watch,
   logLevel: "info"
 };
 
@@ -18,5 +18,6 @@ if (watch) {
   await context.watch();
 } else {
   await esbuild.build(options);
+  await esbuild.build({ ...options, entryPoints: ["src/extension/edhSmoke.ts"], outfile: "dist/edhSmoke.cjs" });
 }
 

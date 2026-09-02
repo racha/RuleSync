@@ -4,51 +4,82 @@
 
 # RuleSync
 
-A Cursor extension that reviews and shares `.cursor` rules, hooks, skills, agents, commands, and MCP config from a GitHub repository.
+Keep your team’s Cursor rules in sync—and under review.
 
-Incoming remote updates are reviewed in native diffs before they touch the workspace. Local edits publish to a proposal branch. Main is never written.
+RuleSync brings `.cursor` rules, hooks, skills, agents, commands, and MCP configuration into one dashboard backed by GitHub or GitLab. Review shared updates before they reach your workspace, edit files normally in Cursor, and send improvements back through a pull request or merge request.
 
-Install from [Open VSX](https://open-vsx.org/extension/INVEON-Development/rulesync). Site: [racha.github.io/RuleSync](https://racha.github.io/RuleSync/).
+No silent overwrites. No direct writes to `main`. No more asking, “Which version of the rules are we using again?”
 
-## What it does
+Install from [Open VSX](https://open-vsx.org/extension/INVEON-Development/rulesync). Learn more at [racha.github.io/RuleSync](https://racha.github.io/RuleSync/).
 
-- Adds a RuleSync icon to the Activity Bar.
-- Watches gitignored `.cursor/` configuration locally.
-- Groups rules, hooks, skills, agents, commands, and MCP configuration in one dashboard.
-- Opens managed files in the editor and uses native diffs for review.
-- Detects incoming, local, and conflicting changes.
-- Applies reviewed remote updates only after confirmation.
-- Publishes local changes to a proposal branch, then opens GitHub Compare for the PR.
+## What RuleSync does
+
+- Adds a RuleSync dashboard to Cursor’s Activity Bar.
+- Organizes rules, hooks, skills, agents, commands, MCP, and configuration in one library.
+- Shows incoming, local, and conflicting changes.
+- Opens every managed change in Cursor’s native diff viewer.
+- Pulls reviewed remote updates one file at a time or all together.
+- Publishes local edits to a `rulesync/…` proposal branch and opens GitHub or GitLab to create the PR or MR.
+- Checks for remote updates on startup, when the dashboard opens, or on a schedule.
+- Supports private GitHub, GitLab.com, and trusted self-hosted GitLab repositories.
+
+## Safer reviews for hooks and automation
+
+Some configuration can do more than change AI writing style. Hooks may run commands, and MCP configuration may start tools or reference credentials. RuleSync gives these files an extra approval step:
+
+1. Hook files, MCP configuration, executables, binaries, and secret-looking content are flagged.
+2. You review the exact change in Cursor’s native diff.
+3. Apply and publish stay blocked until you explicitly approve that file.
+4. Approval is tied to that exact content. Change the file and RuleSync asks again.
+
+Files larger than 5 MiB are rejected. The checks are practical guardrails, not a substitute for reviewing code—surprise shell commands are rarely the fun kind of surprise.
 
 ## Setup
 
-Open the RuleSync icon in the Activity Bar. The dashboard walks through four steps:
+Open the RuleSync icon in the Activity Bar:
 
-1. Activate RuleSync for the opened workspace.
-2. Connect GitHub with the RuleSync GitHub App (device code). Install the app on the **rules** repository only.
-3. Choose `owner/repo` and branch. Private repositories work. This release supports one source.
-4. If the repository has no manifest, RuleSync writes `rulesync.yml` and opens a pull request. Merge it once. You do not edit or maintain that file.
+1. Activate RuleSync for the workspace.
+2. Connect GitHub through the RuleSync GitHub App, or connect GitLab with a personal access token using the `api` scope.
+3. Choose the repository and branch containing the team’s `.cursor/` folder.
+4. Review the first sync and pull the files you want.
 
-The dashboard then becomes the rule library, changes review, and settings.
+For self-hosted GitLab, confirm the trusted HTTPS host before entering a token. Each folder has one source. Multi-root windows keep folders independent.
 
-## Manifest
+## Repository layout
 
-RuleSync generates `rulesync.yml` for you. After you merge that PR, it reads the file on its own. Day-to-day work stays in `.cursor`.
+No manifest is required. RuleSync syncs repository-root `.cursor/**` only. Existing `rulesync.yml` files are ignored.
 
-```yaml
-version: 1
-
-profiles:
-  cursor-project:
-    adapter: cursor
-    scope: project
-    source: .cursor
-    mode: mirror
+```text
+.cursor/
+  rules/
+  hooks.json
+  skills/
+  agents/
+  commands/
+  mcp.json
 ```
 
-## Trust
+If the repository has no default branch, create it on GitHub or GitLab and check again. RuleSync does not initialize or write the shared branch.
 
-- Tokens stay in Cursor secret storage — not in settings or the repo.
-- The GitHub App needs **Contents: Read & write**, **Metadata: Read**, and **Pull requests: Read & write** on the rules repository.
-- RuleSync does not push the source branch.
-- Hooks, MCP, secret-looking content, binaries, and large files require confirmation before apply or publish.
+## Trust and credentials
+
+- Tokens stay in Cursor’s secret storage—not in settings or the repository. GitHub sessions can be disconnected.
+- Untrusted workspaces do not read `.cursor`, watch files, use tokens, or contact GitHub or GitLab.
+- GitLab credentials stay bound to the host you approved.
+- Writes outside `.cursor` and symlinked destinations are rejected.
+- The shared branch is checked again before RuleSync creates or updates a proposal.
+
+## What’s new in 1.1.0
+
+- New GitLab.com and self-hosted GitLab
+- New per-file high-risk approval
+- New proposal-branch review links
+- New independent folder sources
+- New restore from remote
+- New local disable
+- New GitHub disconnect
+- Fixed revert of deleted files
+- BREAKING rulesync.yml mappings
+- BREAKING custom GitHub client IDs
+- BREAKING empty-repo default-branch creation
+- BREAKING workspace-scoped sources

@@ -5,8 +5,8 @@ export class VirtualDocumentStore implements vscode.TextDocumentContentProvider 
   readonly #emitter = new vscode.EventEmitter<vscode.Uri>();
   readonly onDidChange = this.#emitter.event;
 
-  set(scheme: "rulesync-remote" | "rulesync-base", path: string, content: Uint8Array | undefined): vscode.Uri {
-    const uri = vscode.Uri.parse(`${scheme}:/${encodeURIComponent(path)}`);
+  set(scheme: "rulesync-remote" | "rulesync-base", folderUri: string, path: string, content: Uint8Array | undefined): vscode.Uri {
+    const uri = vscode.Uri.parse(`${scheme}:/${encodeURIComponent(folderUri)}/${encodeURIComponent(path)}`);
     this.#documents.set(uri.toString(), content ? new TextDecoder().decode(content) : "");
     this.#emitter.fire(uri);
     return uri;

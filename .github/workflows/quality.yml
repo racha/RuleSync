@@ -1,0 +1,55 @@
+name: Quality
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    env:
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.20.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Frozen install
+        run: |
+          if [ -f ../../pnpm-workspace.yaml ]; then
+            cd ../..
+          fi
+          pnpm install --frozen-lockfile
+
+      - name: Typecheck, test, and build
+        run: |
+          if [ -f ../../pnpm-workspace.yaml ]; then
+            cd ../..
+            pnpm typecheck
+            pnpm test
+            pnpm --filter rulesync build
+          else
+            pnpm test
+            pnpm build
+          fi
+
+      - name: List and package
+        run: |
+          npx vsce ls --no-dependencies
+          npx vsce package --no-dependencies
+          vsix=$(ls -1 *.vsix | head -n 1)
+          mkdir -p /tmp/rulesync-vsix
+          unzip -q "$vsix" -d /tmp/rulesync-vsix
+          if find /tmp/rulesync-vsix -name '*.map' | grep -q .; then echo "Source maps are packaged."; exit 1; fi
+          if grep -R -E 'glpat-[A-Za-z0-9_\-]{8,}|github_pat_[A-Za-z0-9_]{10,}|gho_[A-Za-z0-9]{10,}|ghu_[A-Za-z0-9]{10,}|rejectUnauthorized' /tmp/rulesync-vsix | grep -q .; then echo "Credential or insecure TLS marker found in package."; exit 1; fi

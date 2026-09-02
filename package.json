@@ -1,8 +1,8 @@
 {
   "name": "rulesync",
   "displayName": "RuleSync",
-  "description": "Review and share Cursor rules from GitHub. Incoming updates stay reviewed. Local edits become a proposal branch.",
-  "version": "1.0.0",
+  "description": "Review and share Cursor rules from GitHub or GitLab. Incoming updates stay reviewed. Local edits become a proposal branch.",
+  "version": "1.1.0",
   "publisher": "INVEON-Development",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -10,7 +10,7 @@
     "color": "#1A1C16",
     "theme": "dark"
   },
-  "keywords": ["cursor", "rules", "github", "sync", ".cursor", "hooks", "skills", "mcp"],
+  "keywords": ["cursor", "rules", "github", "gitlab", "sync", ".cursor", "hooks", "skills", "mcp"],
   "homepage": "https://racha.github.io/RuleSync/",
   "bugs": {
     "url": "https://github.com/racha/RuleSync/issues"
@@ -53,13 +53,15 @@
           "type": "array",
           "default": [],
           "maxItems": 1,
+          "scope": "resource",
           "description": "The connected RuleSync source. Configure this through the RuleSync dashboard.",
           "items": {
             "type": "object",
             "required": ["id", "provider", "repository", "profile"],
             "properties": {
               "id": { "type": "string" },
-              "provider": { "type": "string", "enum": ["github"] },
+              "provider": { "type": "string", "enum": ["github", "gitlab"] },
+              "baseUrl": { "type": "string", "description": "GitLab base URL. Omit for github and gitlab.com." },
               "repository": { "type": "string" },
               "ref": { "type": "string" },
               "profile": { "type": "string" },
@@ -70,21 +72,22 @@
         "rulesync.projectInitialized": {
           "type": "boolean",
           "default": false,
+          "scope": "resource",
           "description": "Whether RuleSync has been activated for this workspace. Configure this through the RuleSync dashboard."
         },
         "rulesync.optOut": {
           "type": "array",
           "default": [],
+          "scope": "resource",
           "description": "Managed destination paths to leave untouched.",
           "items": { "type": "object", "required": ["source", "paths"], "properties": { "source": { "type": "string" }, "paths": { "type": "array", "items": { "type": "string" } } } }
         },
-        "rulesync.updateCheck.mode": { "type": "string", "enum": ["off", "timed", "events", "both"], "default": "both", "description": "When RuleSync checks GitHub for rule updates." },
+        "rulesync.updateCheck.mode": { "type": "string", "enum": ["off", "timed", "events", "both"], "default": "both", "description": "When RuleSync checks the connected source for rule updates." },
         "rulesync.updateCheck.interval": { "type": "string", "enum": ["hourly", "daily", "weekly"], "default": "daily", "description": "How often a scheduled check runs." },
-        "rulesync.updateCheck.onStart": { "type": "boolean", "default": true, "description": "Check GitHub when the editor opens this workspace." },
-        "rulesync.updateCheck.onFocus": { "type": "boolean", "default": false, "description": "Check GitHub when the editor window is focused again." },
-        "rulesync.updateCheck.onDashboardOpen": { "type": "boolean", "default": true, "description": "Check GitHub when the RuleSync sidebar is opened." },
-        "rulesync.checkIntervalMinutes": { "type": "number", "default": 15, "minimum": 5, "maximum": 1440, "description": "Deprecated. Use RuleSync settings to choose hourly, daily, or weekly checks." },
-        "rulesync.githubAppClientId": { "type": "string", "default": "Iv23li1SFwqQ6d45EmWN", "markdownDescription": "Override the bundled RuleSync GitHub App client ID. Leave empty to use the official app." }
+        "rulesync.updateCheck.onStart": { "type": "boolean", "default": true, "description": "Check the connected source when the editor opens this workspace." },
+        "rulesync.updateCheck.onFocus": { "type": "boolean", "default": false, "description": "Check the connected source when the editor window is focused again." },
+        "rulesync.updateCheck.onDashboardOpen": { "type": "boolean", "default": true, "description": "Check the connected source when the RuleSync sidebar is opened." },
+        "rulesync.checkIntervalMinutes": { "type": "number", "default": 15, "minimum": 5, "maximum": 1440, "description": "Deprecated. Use RuleSync settings to choose hourly, daily, or weekly checks." }
       }
     }
   },
@@ -98,6 +101,7 @@
     "@rulesync/adapters": "workspace:*",
     "@rulesync/core": "workspace:*",
     "@rulesync/provider-github": "workspace:*",
+    "@rulesync/provider-gitlab": "workspace:*",
     "chokidar": "^4.0.3",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

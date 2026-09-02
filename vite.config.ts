@@ -7,7 +7,7 @@ export default defineConfig({
   build: {
     outDir: "dist/webview",
     emptyOutDir: false,
-    sourcemap: true,
+    sourcemap: process.argv.includes("--watch"),
     rollupOptions: {
       input: "src/webview/index.html",
       output: {

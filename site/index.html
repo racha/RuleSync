@@ -3,11 +3,11 @@
 	<head>
 		<meta charset="utf-8">
 		<meta name="viewport" content="width=device-width, initial-scale=1">
-		<title>RuleSync — review and share Cursor rules from GitHub</title>
-		<meta name="description" content="A Cursor extension that syncs .cursor rules, hooks, and skills with a GitHub repository. Review incoming updates. Propose local changes. Never writes main.">
+		<title>RuleSync — shared Cursor rules, reviewed before they sync</title>
+		<meta name="description" content="Keep your team’s Cursor rules, hooks, skills, and MCP configuration in sync through GitHub or GitLab—with diffs, safety reviews, and pull requests built in.">
 		<meta name="theme-color" content="#1A1C16">
 		<meta property="og:title" content="RuleSync">
-		<meta property="og:description" content="Review and share Cursor rules from GitHub.">
+		<meta property="og:description" content="One dashboard for shared Cursor rules, reviewed updates, and pull requests.">
 		<meta property="og:type" content="website">
 		<meta property="og:url" content="https://racha.github.io/RuleSync/">
 		<meta property="og:image" content="https://racha.github.io/RuleSync/icon.png">
@@ -16,7 +16,7 @@
 		<link rel="preconnect" href="https://fonts.googleapis.com">
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 		<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@1,6..72,500&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
-		<link rel="stylesheet" href="./styles.css">
+		<link rel="stylesheet" href="./styles.css?v=1.1.0-4">
 		<link rel="stylesheet" href="./dashboard.css">
 	</head>
 	<body>
@@ -30,7 +30,9 @@
 				</a>
 
 				<nav class="navLinks">
+					<a href="#whats-new">1.1.0</a>
 					<a href="#how">How it works</a>
+					<a href="#trust">Safety</a>
 					<a href="https://open-vsx.org/extension/INVEON-Development/rulesync">Open VSX</a>
 					<a href="https://github.com/racha/RuleSync">GitHub</a>
 				</nav>
@@ -42,8 +44,8 @@
 				<section class="hero">
 					<img class="heroMark" src="./logo.svg" alt="">
 					<p class="eyebrow">CURSOR EXTENSION</p>
-					<h1>Share Cursor rules the way you share code.</h1>
-					<p>RuleSync keeps <code>.cursor</code> rules, hooks, skills, and MCP config in a GitHub repository. Incoming updates are reviewed before they touch the workspace. Local edits become a proposal branch — never a write to main.</p>
+					<h1>Keep team rules in sync. Keep humans in control.</h1>
+					<p>RuleSync gives your team one dashboard for shared Cursor rules, hooks, skills, and automation. Review incoming updates in a diff, pull only what you approve, and send local improvements back through a PR or MR.</p>
 					<div class="actions">
 						<a class="btn" href="https://open-vsx.org/extension/INVEON-Development/rulesync">Get the extension</a>
 						<a class="btn ghost" href="https://github.com/racha/RuleSync">View the repository</a>
@@ -51,9 +53,9 @@
 				</section>
 
 				<div class="states">
-					<div class="state"><b>Incoming</b><span>Remote changed. Diff it, then apply.</span></div>
-					<div class="state"><b>Local</b><span>You changed it. Publish a proposal branch.</span></div>
-					<div class="state"><b>Conflict</b><span>Both sides moved. Resolve before sync.</span></div>
+					<div class="state"><b>Incoming</b><span>The team source changed. Review before pulling.</span></div>
+					<div class="state"><b>Local</b><span>You improved something. Send it back through review.</span></div>
+					<div class="state"><b>Conflict</b><span>Both sides changed. You choose what wins.</span></div>
 				</div>
 
 			<div class="shots" aria-hidden="true" inert>
@@ -98,7 +100,7 @@
 									<strong>Proposal branch ready</strong>
 									<span>rulesync/stefan/20260831-1412</span>
 								</div>
-								<span class="secondary">Create PR</span>
+								<span class="secondary">Create PR on GitHub</span>
 							</div>
 							<div class="nextAction">
 								<span>Next best action</span>
@@ -174,7 +176,7 @@
 								<div>
 									<span>RULESYNC</span>
 									<strong>acme-app</strong>
-									<small>acme/cursor-rules</small>
+									<small>gitlab.com/acme/cursor-rules</small>
 								</div>
 							</div>
 							<span class="iconButton">↻</span>
@@ -195,7 +197,7 @@
 								</div>
 							</header>
 							<div class="changeGroup">
-								<h3>Incoming from GitHub<span>2</span></h3>
+								<h3>Incoming from GitLab<span>2</span></h3>
 								<div class="change">
 									<div><strong>Prefer TypeScript strict mode</strong><small>.cursor/rules/typescript.mdc</small></div>
 									<span class="btnish">Pull</span>
@@ -212,105 +214,129 @@
 				</figure>
 			</div>
 
+				<section id="whats-new">
+					<p class="eyebrow">1.1.0</p>
+					<h2>What’s new</h2>
+					<ul class="notes">
+						<li>New GitLab.com and self-hosted GitLab</li>
+						<li>New per-file high-risk approval</li>
+						<li>New proposal-branch review links</li>
+						<li>New independent folder sources</li>
+						<li>New restore from remote</li>
+						<li>New local disable</li>
+						<li>New GitHub disconnect</li>
+						<li>Fixed revert of deleted files</li>
+						<li>BREAKING rulesync.yml mappings</li>
+						<li>BREAKING custom GitHub client IDs</li>
+						<li>BREAKING empty-repo default-branch creation</li>
+						<li>BREAKING workspace-scoped sources</li>
+					</ul>
+				</section>
+
 				<section id="why">
 					<p class="eyebrow">WHY</p>
-					<h2>Team rules, versioned and reviewable.</h2>
-					<p class="lead">Platform teams already keep coding standards in git. RuleSync does the same for AI-editor guidance — without dumping gitignored <code>.cursor</code> files onto main.</p>
+					<h2>One source of truth for every developer.</h2>
+					<p class="lead">Cursor configuration is often gitignored, so team guidance slowly turns into five slightly different copies. RuleSync keeps it versioned, reviewable, and easy to adopt—without putting anyone’s personal setup on <code>main</code>.</p>
 					<div class="grid">
 						<article class="card">
-							<strong>Three-way sync</strong>
-							<p>Every file is compared against the last accepted baseline, your workspace, and GitHub. You see incoming, local, and conflict — not a silent overwrite.</p>
+							<strong>Your whole Cursor toolkit</strong>
+							<p>Manage rules, hooks, skills, agents, commands, MCP, and related configuration from one clear library.</p>
 						</article>
 						<article class="card">
-							<strong>Native diffs</strong>
-							<p>Review happens in Cursor’s own diff tabs. Apply one file or all incoming updates after you have looked at them.</p>
+							<strong>See exactly what changed</strong>
+							<p>Incoming and local updates open in Cursor’s native diff viewer. Pull one file, apply everything reviewed, or resolve a conflict yourself.</p>
 						</article>
 						<article class="card">
-							<strong>Proposal branches</strong>
-							<p>Local edits publish to <code>rulesync/…</code> and open GitHub Compare. Main stays untouched. You create the pull request.</p>
+							<strong>PRs, not mystery pushes</strong>
+							<p>Local edits go to a <code>rulesync/…</code> proposal branch. RuleSync opens GitHub or GitLab so your normal team review can finish the job.</p>
 						</article>
 						<article class="card">
-							<strong>Risk prompts</strong>
-							<p>Hooks, MCP, secrets-looking content, binaries, and large files ask for confirmation before apply or publish.</p>
+							<strong>Extra care for powerful files</strong>
+							<p>Hooks, MCP, executables, binaries, and secret-looking content need an explicit per-file approval. If the contents change, approval is required again.</p>
+						</article>
+						<article class="card">
+							<strong>Built for private repositories</strong>
+							<p>Connect GitHub, GitLab.com, or trusted self-hosted GitLab. Credentials stay in Cursor’s secret storage, not in your project.</p>
+						</article>
+						<article class="card">
+							<strong>Quietly keeps watch</strong>
+							<p>Check for shared updates on startup, when the dashboard opens, or on a schedule. Because “did anyone update the rules?” gets old quickly.</p>
 						</article>
 					</div>
 				</section>
 
 				<section id="how">
 					<p class="eyebrow">SETUP</p>
-					<h2>Four steps, then the library.</h2>
+					<h2>From zero to synced in four steps.</h2>
 					<div class="steps">
 						<div class="step">
 							<span class="num">1</span>
 							<div>
 								<h3>Activate the workspace</h3>
-								<p>Open the RuleSync icon in the Activity Bar and turn the extension on for this folder.</p>
+								<p>Open the RuleSync icon in the Activity Bar and activate it for the current project.</p>
 							</div>
 						</div>
 						<div class="step">
 							<span class="num">2</span>
 							<div>
-								<h3>Connect GitHub</h3>
-								<p>Sign in with the RuleSync GitHub App via device code. Install the app on the rules repository only.</p>
+								<h3>Connect GitHub or GitLab</h3>
+								<p>Use the RuleSync GitHub App, or connect GitLab with an <code>api</code> token. Private repositories work too.</p>
 							</div>
 						</div>
 						<div class="step">
 							<span class="num">3</span>
 							<div>
 								<h3>Pick the rules repo</h3>
-								<p>Choose owner/repo and branch. Private repositories work. One source per workspace in this release.</p>
+								<p>Choose the repository and branch containing the team’s root <code>.cursor/</code> folder. Each folder has one source.</p>
 							</div>
 						</div>
 						<div class="step">
 							<span class="num">4</span>
 							<div>
-								<h3>Merge the generated manifest</h3>
-								<p>RuleSync writes <code>rulesync.yml</code> for you and opens a pull request. Merge it once. You do not edit or maintain that file.</p>
+								<h3>Review the first sync</h3>
+								<p>Open diffs, approve sensitive files, and pull the configuration you want. From then on, RuleSync tracks what changed on either side.</p>
 							</div>
 						</div>
 					</div>
 				</section>
 
-				<section id="manifest">
+				<section id="layout">
 					<div class="split">
 						<div>
-							<p class="eyebrow">MANIFEST</p>
-							<h2>Generated for you. Not something you maintain.</h2>
-							<p class="lead">If the rules repo has no <code>rulesync.yml</code>, RuleSync creates the Cursor starter, publishes it on a proposal branch, and opens the pull request. After you merge that PR, RuleSync reads the file on its own. You keep working in <code>.cursor</code> — not in YAML.</p>
+							<p class="eyebrow">LAYOUT</p>
+							<h2>Drop in <code>.cursor</code>. That’s it.</h2>
+							<p class="lead">No manifest and no mapping puzzle. RuleSync syncs repository-root <code>.cursor/**</code> and ignores existing <code>rulesync.yml</code> files. The shared branch stays read-only.</p>
 						</div>
-						<pre><code>version: 1
-
-profiles:
-  cursor-project:
-    adapter: cursor
-    scope: project
-    source: .cursor
-    mode: mirror</code></pre>
+						<pre><code>.cursor/
+  rules/
+  hooks.json
+  skills/
+  mcp.json</code></pre>
 					</div>
 				</section>
 
 				<section id="trust">
-					<p class="eyebrow">TRUST</p>
-					<h2>Narrow access. Explicit writes.</h2>
+					<p class="eyebrow">SAFETY REVIEW</p>
+					<h2>Sensitive changes stop here.</h2>
 					<div class="checks">
 						<div class="check">
 							<i></i>
-							<p>Tokens live in Cursor secret storage — never in workspace settings or the repo.<span>The GitHub App asks for Contents, Metadata, and Pull requests on the rules repository you install it on.</span></p>
+							<p>RuleSync flags powerful files.<span>Hooks, MCP configuration, executables, binaries, and possible secrets are called out automatically.</span></p>
 						</div>
 						<div class="check">
 							<i></i>
-							<p>Main is not a write target.<span>RuleSync re-checks the base SHA before publishing a proposal branch.</span></p>
+							<p>Review the actual change.<span>Open the file in Cursor’s diff viewer. It cannot be applied or published until you approve it.</span></p>
 						</div>
 						<div class="check">
 							<i></i>
-							<p>Untrusted workspaces stay read-only.<span>Filesystem writes and publish require a trusted folder.</span></p>
+							<p>If the file changes, the approval expires.<span>The updated version must be reviewed again before it can move anywhere.</span></p>
 						</div>
 					</div>
 				</section>
 
 				<footer class="footer">
 					<a href="https://github.com/racha/RuleSync">github.com/racha/RuleSync</a>
-					<span>Cursor extension</span>
+					<span>1.1.0 · Cursor extension</span>
 				</footer>
 			</div>
 		</div>
