@@ -15,7 +15,7 @@ const bundledGithubAppClientId = "Iv23li1SFwqQ6d45EmWN";
 const githubAppInstallUrl = "https://github.com/apps/rulesync/installations/select_target";
 const gitlabPatHelpUrl = "https://docs.gitlab.com/user/profile/personal_access_tokens/";
 const untrustedAllowed = new Set(["ready", "source.disconnect", "auth.forget", "gitlab.pat.forget", "settings.updateCheck", "proposal.openCompare", "folder.select"]);
-const sessionCommands = new Set(["workspace.initialize", "manifest.initialize", "source.save", "source.disconnect", "sync.refresh", "content.open", "content.diff", "content.create", "content.disable", "content.enable", "content.rename", "content.delete", "content.revert", "conflict.resolve", "remote.apply", "remote.applyAll", "remote.restore", "risks.accept", "risk.accept", "proposal.publish", "proposal.openCompare"]);
+const sessionCommands = new Set(["workspace.initialize", "manifest.initialize", "source.save", "source.disconnect", "sync.refresh", "content.open", "content.diff", "content.create", "content.localOnly", "content.disable", "content.enable", "content.rename", "content.delete", "content.revert", "conflict.resolve", "remote.apply", "remote.applyAll", "remote.restore", "risks.accept", "risk.accept", "proposal.publish", "proposal.openCompare"]);
 
 export interface ControllerDeps extends FolderSessionDeps {
   createGithub?: (token: string, signal?: AbortSignal) => RulesProvider;

@@ -32,6 +32,10 @@ export function folderGitlabBaseUrlKey(uri: string): string {
   return `${legacyGitlabBaseUrlKey}:${encodeURIComponent(uri)}`;
 }
 
+export function folderLocalOnlyKey(uri: string): string {
+  return `rulesync.localOnly.v1:${encodeURIComponent(uri)}`;
+}
+
 export function isMultiRoot(folders = vscode.workspace.workspaceFolders): boolean {
   return (folders?.length ?? 0) > 1;
 }
@@ -59,7 +63,8 @@ export function readFolderOptOut(folder: vscode.WorkspaceFolder): FolderOptOut[]
 }
 
 export async function writeFolderSetting(folder: vscode.WorkspaceFolder, key: string, value: unknown): Promise<void> {
-  await vscode.workspace.getConfiguration("rulesync", folder.uri).update(key, value, vscode.ConfigurationTarget.WorkspaceFolder);
+  const target = isMultiRoot() ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
+  await vscode.workspace.getConfiguration("rulesync", folder.uri).update(key, value, target);
 }
 
 export function inspectWorkspaceSources(): SourceSpec[] | undefined {

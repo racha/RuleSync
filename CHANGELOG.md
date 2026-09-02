@@ -4,6 +4,11 @@
 
 Nothing yet. We are enjoying the suspicious calm.
 
+## 1.1.1
+
+- New local-only content
+- Fixed folder settings write
+
 ## 1.1.0
 
 - New GitLab.com and self-hosted GitLab

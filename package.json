@@ -2,7 +2,7 @@
   "name": "rulesync",
   "displayName": "RuleSync",
   "description": "Review and share Cursor rules from GitHub or GitLab. Incoming updates stay reviewed. Local edits become a proposal branch.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "publisher": "INVEON-Development",
   "license": "MIT",
   "icon": "resources/icon.png",

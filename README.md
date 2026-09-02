@@ -16,6 +16,7 @@ Install from [Open VSX](https://open-vsx.org/extension/INVEON-Development/rulesy
 
 - Adds a RuleSync dashboard to Cursor’s Activity Bar.
 - Organizes rules, hooks, skills, agents, commands, MCP, and configuration in one library.
+- Marks files local-only so Cursor still uses them while RuleSync leaves them out of future proposals. The list stays in editor workspace state, not in `.cursor`.
 - Shows incoming, local, and conflicting changes.
 - Opens every managed change in Cursor’s native diff viewer.
 - Pulls reviewed remote updates one file at a time or all together.
@@ -64,10 +65,16 @@ If the repository has no default branch, create it on GitHub or GitLab and check
 ## Trust and credentials
 
 - Tokens stay in Cursor’s secret storage—not in settings or the repository. GitHub sessions can be disconnected.
+- Local-only paths are stored in editor workspace state for that folder. RuleSync does not write a registry file under `.cursor`.
 - Untrusted workspaces do not read `.cursor`, watch files, use tokens, or contact GitHub or GitLab.
 - GitLab credentials stay bound to the host you approved.
 - Writes outside `.cursor` and symlinked destinations are rejected.
 - The shared branch is checked again before RuleSync creates or updates a proposal.
+
+## What’s new in 1.1.1
+
+- New local-only content
+- Fixed folder settings write
 
 ## What’s new in 1.1.0
 

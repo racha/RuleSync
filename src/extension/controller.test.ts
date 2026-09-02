@@ -1111,4 +1111,126 @@ describe("RuleSyncController", () => {
     expect(roots).toEqual([alpha.uri.fsPath]);
     expect(instance.dashboardState().selectedFolderUri).toBe(beta.uri.toString());
   });
+
+  it("creates local-only content in editor state and keeps it out of changes", async () => {
+    const { instance, writes, files } = mutableController();
+    await instance.initialize();
+    await instance.handle({ type: "content.create", request: { type: "rule", name: "privacy", localOnly: true } });
+    const created = instance.dashboardState().items.find((item) => item.path === ".cursor/rules/privacy.mdc");
+    expect(created?.localOnly).toBe(true);
+    expect(created?.inWorkspace).toBe(true);
+    expect(instance.dashboardState().localCount).toBe(0);
+    expect(writes).toEqual([".cursor/rules/privacy.mdc"]);
+    expect(writes.some((value) => value.includes(".rulesync-local"))).toBe(false);
+    expect(files.some((entry) => entry.path === ".cursor/rules/privacy.mdc")).toBe(true);
+    expect(vscode.workspaceState.get(localOnlyStateKey())).toEqual({ version: 1, paths: [".cursor/rules/privacy.mdc"] });
+  });
+
+  it("fails closed when the local-only registry is malformed", async () => {
+    vscode.workspaceState.set(localOnlyStateKey(), { version: 2, paths: [".cursor/rules/foo.mdc"] });
+    const { instance } = mutableController(provider(), [hashed(".cursor/rules/foo.mdc", "mine")]);
+    await instance.initialize();
+    expect(instance.dashboardState().status).toBe("error");
+    expect(instance.dashboardState().items).toEqual([]);
+    expect(instance.dashboardState().localCount).toBe(0);
+  });
+
+  it("toggles local-only, ignores the same-path remote, and preserves it through restore", async () => {
+    vscode.secrets.set("rulesync.github.accessToken", "gho-test");
+    vscode.config.projectInitialized = true;
+    vscode.config.sources = [{ id: "team", provider: "github", repository: "acme/rules", profile: "cursor-project", enabled: true }];
+    const remote = hashed(".cursor/rules/foo.mdc", "remote");
+    const local = hashed(".cursor/rules/foo.mdc", "mine");
+    const extra = hashed(".cursor/rules/notes.mdc", "notes");
+    vscode.workspaceState.set("rulesync.syncState.v1", { schemaVersion: 1, sourceIdentity: "github:acme/rules:default:cursor-project", entries: { [remote.path]: { localHash: remote.contentHash, remoteOid: remote.contentHash, mode: "file" } } });
+    vscode.workspaceState.set(localOnlyStateKey(), { version: 1, paths: [extra.path] });
+    const { instance, writes, files } = mutableController(connectedRemotes([remote]), [local, extra]);
+    await instance.initialize();
+    await instance.refresh();
+    expect(instance.dashboardState().items.find((item) => item.path === extra.path)?.localOnly).toBe(true);
+    expect(instance.dashboardState().localCount).toBe(1);
+    await instance.handle({ type: "content.localOnly", path: local.path, enabled: true });
+    expect(instance.dashboardState().items.find((item) => item.path === local.path)?.localOnly).toBe(true);
+    expect(instance.dashboardState().localCount).toBe(0);
+    expect(instance.dashboardState().incomingCount).toBe(0);
+    await instance.handle({ type: "remote.restore" });
+    expect(writes).not.toContain("rm:.cursor/rules/notes.mdc");
+    expect(writes).not.toContain("rm:.cursor/rules/foo.mdc");
+    expect(files.map((entry) => entry.path).sort()).toEqual([local.path, extra.path].sort());
+    await instance.handle({ type: "content.localOnly", path: local.path, enabled: false });
+    expect(instance.dashboardState().items.find((item) => item.path === local.path)?.localOnly).toBeFalsy();
+    expect(instance.dashboardState().localCount + instance.dashboardState().incomingCount + instance.dashboardState().conflictCount).toBeGreaterThan(0);
+  });
+
+  it("renames and deletes local-only files and keeps the registry off proposals", async () => {
+    vscode.secrets.set("rulesync.github.accessToken", "gho-test");
+    vscode.config.projectInitialized = true;
+    vscode.config.sources = [{ id: "team", provider: "github", repository: "acme/rules", profile: "cursor-project", enabled: true }];
+    const tracked = hashed(".cursor/rules/team.mdc", "team");
+    const privateRule = hashed(".cursor/rules/secret.mdc", "secret");
+    vscode.workspaceState.set(localOnlyStateKey(), { version: 1, paths: [privateRule.path] });
+    const published: Array<{ path: string }> = [];
+    const host = connectedRemote(hashed(".cursor/rules/other.mdc", "other"), {
+      getTree: async () => [],
+      createProposal: async (input) => {
+        published.push(...input.changes);
+        return { branch: "rulesync/ada/1", headCommit: "def", compareUrl: "https://github.com/acme/rules/compare/main...x" };
+      }
+    });
+    const { instance, writes, renames } = mutableController(host, [tracked, privateRule]);
+    vscode.window.showInputBox = async () => "hidden.mdc";
+    await instance.initialize();
+    await instance.refresh();
+    await instance.handle({ type: "content.disable", path: privateRule.path });
+    expect(instance.dashboardState().items.find((item) => item.path === privateRule.path)?.disabled).toBe(true);
+    expect(instance.dashboardState().items.find((item) => item.path === privateRule.path)?.localOnly).toBe(true);
+    await instance.handle({ type: "content.enable", path: privateRule.path });
+    await instance.handle({ type: "content.rename", path: privateRule.path });
+    expect(renames).toContain(".cursor/rules/secret.mdc->.cursor/rules/hidden.mdc");
+    expect(vscode.workspaceState.get(localOnlyStateKey())).toEqual({ version: 1, paths: [".cursor/rules/hidden.mdc"] });
+    await instance.handle({ type: "proposal.publish", message: "share team" });
+    expect(published.map((change) => change.path)).toEqual([tracked.path]);
+    await instance.handle({ type: "content.delete", path: ".cursor/rules/hidden.mdc" });
+    expect(writes).toContain("rm:.cursor/rules/hidden.mdc");
+    expect(vscode.workspaceState.get(localOnlyStateKey())).toBeUndefined();
+  });
+
+  it("keeps local-only registry when the source is disconnected", async () => {
+    vscode.config.projectInitialized = true;
+    vscode.config.sources = [{ id: "team", provider: "github", repository: "acme/rules", profile: "cursor-project", enabled: true }];
+    vscode.workspaceState.set(localOnlyStateKey(), { version: 1, paths: [".cursor/rules/privacy.mdc"] });
+    const { instance } = mutableController(provider(), [hashed(".cursor/rules/privacy.mdc", "mine")]);
+    await instance.initialize();
+    await instance.handle({ type: "source.disconnect" });
+    expect(vscode.workspaceState.get(localOnlyStateKey())).toEqual({ version: 1, paths: [".cursor/rules/privacy.mdc"] });
+    expect(instance.dashboardState().items.find((item) => item.path === ".cursor/rules/privacy.mdc")?.localOnly).toBe(true);
+  });
+
+  it("isolates local-only registries across folders", async () => {
+    const alpha = workspaceFolder("/tmp/alpha", "alpha");
+    const beta = workspaceFolder("/tmp/beta", "beta");
+    vscode.setFolders([alpha, beta]);
+    vscode.folderValues.set(alpha.uri.toString(), { projectInitialized: true, sources: [{ id: "team", provider: "github", repository: "acme/alpha", profile: "cursor-project", enabled: true }] });
+    vscode.folderValues.set(beta.uri.toString(), { projectInitialized: true, sources: [{ id: "team", provider: "github", repository: "acme/beta", profile: "cursor-project", enabled: true }] });
+    vscode.workspaceState.set(localOnlyStateKey(alpha.uri.toString()), { version: 1, paths: [".cursor/rules/privacy.mdc"] });
+    const privacy = hashed(".cursor/rules/privacy.mdc", "mine");
+    const files = new Map<string, FileEntry[]>([[alpha.uri.fsPath, [privacy]], [beta.uri.fsPath, [privacy]]]);
+    const { context: extensionContext } = context();
+    const instance = new RuleSyncController(extensionContext, {
+      createGithub: () => provider(),
+      listFiles: async (root) => files.get(root)?.map((entry) => ({ ...entry, content: entry.content ? new Uint8Array(entry.content) : new Uint8Array() })) ?? [],
+      writeFile: async () => undefined,
+      removeFile: async () => undefined,
+      watch: () => ({ on: () => undefined, close: () => undefined }) as never
+    });
+    await instance.initialize();
+    expect(instance.dashboardState().items.find((item) => item.path === privacy.path)?.localOnly).toBe(true);
+    await instance.handle({ type: "folder.select", folderUri: beta.uri.toString() });
+    expect(instance.dashboardState().items.find((item) => item.path === privacy.path)?.localOnly).toBeFalsy();
+    expect(instance.dashboardState().localCount).toBe(1);
+  });
 });
+
+function localOnlyStateKey(uri = "file:///tmp/rulesync-ws"): string {
+  return `rulesync.localOnly.v1:${encodeURIComponent(uri)}`;
+}

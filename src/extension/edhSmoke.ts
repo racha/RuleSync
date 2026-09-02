@@ -53,6 +53,10 @@ async function runSingle(controller: RuleSyncController, folder: vscode.Workspac
   await controller.handle({ type: "content.disable", path: ".cursor/rules/shared.mdc" });
   assert.equal(controller.dashboardState().items.find(({ path: itemPath }) => itemPath === ".cursor/rules/shared.mdc")?.disabled, true);
   assert.ok(fs.existsSync(path.join(folder.uri.fsPath, ".cursor/rules/shared.mdc.off")));
+  await controller.handle({ type: "content.create", request: { type: "rule", name: "local-only-smoke", localOnly: true } });
+  assert.equal(controller.dashboardState().items.find(({ path: itemPath }) => itemPath === ".cursor/rules/local-only-smoke.mdc")?.localOnly, true);
+  assert.ok(fs.existsSync(path.join(folder.uri.fsPath, ".cursor/rules/local-only-smoke.mdc")));
+  assert.ok(!fs.existsSync(path.join(folder.uri.fsPath, ".cursor/.rulesync-local.json")));
 }
 
 async function runMulti(controller: RuleSyncController, folders: vscode.WorkspaceFolder[]): Promise<void> {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { awaitsHost, canToggleLocalDisable, connectSetupCopy, defaultSetupProvider, emptyRepositoryCopy, firstUseGitlabUrl, folderSwitchReset, hostIsApproved, legacyWorkspaceNotice, matchesBusy, recoveredGitlabUrl, repositorySetupCopy, setupGitlabKind, setupStatusNotice, sourceMatchesSetup, splitRisks, visibleSetupRepos } from "./setup.js";
+import { awaitsHost, canToggleLocalDisable, connectSetupCopy, defaultSetupProvider, emptyRepositoryCopy, firstUseGitlabUrl, folderSwitchReset, hostIsApproved, itemMenuEntries, legacyWorkspaceNotice, matchesBusy, recoveredGitlabUrl, repositorySetupCopy, setupGitlabKind, setupStatusNotice, sourceMatchesSetup, splitRisks, visibleSetupRepos } from "./setup.js";
 
 const githubSource = { provider: "github" as const, repository: "racha/cursor-rules" };
 const gitlabSource = { provider: "gitlab" as const, repository: "group/project" };
@@ -82,6 +82,7 @@ describe("awaitsHost", () => {
     expect(awaitsHost("sync.refresh")).toBe(true);
     expect(awaitsHost("auth.forget")).toBe(true);
     expect(awaitsHost("remote.restore")).toBe(true);
+    expect(awaitsHost("content.localOnly")).toBe(true);
     expect(awaitsHost("proposal.openCompare")).toBe(true);
     expect(awaitsHost("proposal.publish")).toBe(true);
     expect(awaitsHost("ready")).toBe(false);
@@ -105,6 +106,14 @@ describe("awaitsHost", () => {
     expect(canToggleLocalDisable({ path: ".cursor/rules/foo.mdc", status: "local", kind: "deleted" })).toBe(false);
     expect(canToggleLocalDisable({ path: ".cursor/rules/foo.mdc", status: "incoming", kind: "added" })).toBe(false);
     expect(canToggleLocalDisable({ path: ".cursor/hooks/record.sh", status: "synced" })).toBe(false);
+  });
+
+  it("builds local-only menus without compare or sync actions", () => {
+    const labels = (entries: ReturnType<typeof itemMenuEntries>) => entries.flatMap((entry) => "label" in entry ? [entry.label] : []);
+    expect(labels(itemMenuEntries({ path: ".cursor/rules/foo.mdc", status: "synced", localOnly: true, inWorkspace: true }))).toEqual(["Track with RuleSync", "Disable", "Rename", "Delete"]);
+    expect(labels(itemMenuEntries({ path: ".cursor/rules/foo.mdc", status: "synced", inWorkspace: true }))).toEqual(["Compare", "Make local only", "Disable", "Rename", "Delete"]);
+    expect(labels(itemMenuEntries({ path: ".cursor/rules/foo.mdc", status: "incoming", kind: "added" }))).toEqual(["Compare", "Pull", "Rename", "Delete"]);
+    expect(labels(itemMenuEntries({ path: ".cursor/rules/foo.mdc", status: "local", kind: "modified", inWorkspace: true }))).toContain("Revert");
   });
 
   it("clears a matching busy key when the host command finishes", () => {

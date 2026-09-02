@@ -38,7 +38,7 @@ const vscode = vi.hoisted(() => {
 
 vi.mock("vscode", () => vscode);
 
-import { assignLegacyWorkspaceSetup, discardLegacyWorkspaceSetup, eligibleFolders, hasLegacyWorkspaceSetup, migrateSingleFolderState, readFolderSources } from "./folderConfig.js";
+import { assignLegacyWorkspaceSetup, discardLegacyWorkspaceSetup, eligibleFolders, hasLegacyWorkspaceSetup, migrateSingleFolderState, readFolderSources, writeFolderSetting } from "./folderConfig.js";
 
 function folder(uri: string): { uri: { scheme: "file"; toString: () => string } } {
   return { uri: { scheme: "file", toString: () => uri } };
@@ -97,5 +97,19 @@ describe("folderConfig", () => {
     expect(vscode.workspaceState.get("rulesync.syncState.v1")).toBeUndefined();
     expect(vscode.workspaceState.get(`rulesync.syncState.v1:${encodeURIComponent("file:///a")}`)).toEqual({ schemaVersion: 1, sourceIdentity: "github:acme/rules:default:cursor-project", entries: { x: 1 } });
     expect(eligibleFolders()[0]?.uri.toString()).toBe("file:///a");
+  });
+
+  it("writes single-folder settings to workspace scope", async () => {
+    vscode.folders = [folder("file:///a")];
+    await writeFolderSetting(vscode.folders[0] as never, "projectInitialized", true);
+    expect(vscode.workspaceValue.projectInitialized).toBe(true);
+    expect(vscode.folderValues.get("file:///a")).toBeUndefined();
+  });
+
+  it("writes multi-root settings to the folder scope", async () => {
+    vscode.folders = [folder("file:///a"), folder("file:///b")];
+    await writeFolderSetting(vscode.folders[0] as never, "projectInitialized", true);
+    expect(vscode.folderValues.get("file:///a")?.projectInitialized).toBe(true);
+    expect(vscode.workspaceValue.projectInitialized).toBeUndefined();
   });
 });

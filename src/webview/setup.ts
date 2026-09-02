@@ -93,7 +93,7 @@ export function hostIsApproved(baseUrl: string | undefined, approved: readonly s
   try { return isGitlabHostApproved(canonicalGitlabBaseUrl(baseUrl), approved); } catch { return false; }
 }
 
-const hostActions = new Set(["auth.start", "auth.forget", "workspace.initialize", "workspace.source.assign", "source.save", "source.disconnect", "github.repos.refresh", "gitlab.host.approve", "gitlab.pat.save", "gitlab.pat.forget", "gitlab.repos.refresh", "sync.refresh", "content.create", "content.revert", "conflict.resolve", "remote.apply", "remote.applyAll", "remote.restore", "risks.accept", "risk.accept", "proposal.publish", "proposal.openCompare"]);
+const hostActions = new Set(["auth.start", "auth.forget", "workspace.initialize", "workspace.source.assign", "source.save", "source.disconnect", "github.repos.refresh", "gitlab.host.approve", "gitlab.pat.save", "gitlab.pat.forget", "gitlab.repos.refresh", "sync.refresh", "content.create", "content.localOnly", "content.revert", "conflict.resolve", "remote.apply", "remote.applyAll", "remote.restore", "risks.accept", "risk.accept", "proposal.publish", "proposal.openCompare"]);
 
 export function awaitsHost(type: string): boolean { return hostActions.has(type); }
 
@@ -109,6 +109,46 @@ export function folderSwitchReset(): { creating: false; customProposal: false; s
 export function canToggleLocalDisable({ path, status, kind }: { path: string; status: string; kind?: string }): boolean {
   if (status === "optedOut" || status === "local" && kind === "deleted" || status === "incoming" && kind === "added") return false;
   return canDisableManagedPath(path);
+}
+
+export interface MenuItemInput {
+  path: string;
+  status: string;
+  kind?: string;
+  disabled?: boolean;
+  localOnly?: boolean;
+  inWorkspace?: boolean;
+}
+
+export interface ItemMenuAction {
+  label: string;
+  action: { type: string; [key: string]: unknown };
+  actionKey?: string;
+  danger?: boolean;
+}
+
+export type ItemMenuEntry = ItemMenuAction | { separator: true };
+
+export function itemMenuEntries(item: MenuItemInput, conflict = false): ItemMenuEntry[] {
+  const { path, status, kind, disabled, localOnly, inWorkspace } = item;
+  const removed = kind === "deleted";
+  const groups: ItemMenuAction[][] = [];
+  if (localOnly) groups.push([{ label: "Track with RuleSync", action: { type: "content.localOnly", path, enabled: false } }]);
+  else {
+    groups.push([{ label: "Compare", action: { type: "content.diff", path, comparison: status === "incoming" ? "remote" : "base" } }]);
+    const sync: ItemMenuAction[] = [];
+    if (conflict) {
+      sync.push({ label: "Keep local", action: { type: "conflict.resolve", path, resolution: "local" }, actionKey: `conflict.resolve:${path}:local` });
+      sync.push({ label: "Use remote", action: { type: "conflict.resolve", path, resolution: "remote" }, actionKey: `conflict.resolve:${path}:remote` });
+    }
+    if (status === "incoming") sync.push({ label: removed ? "Apply deletion" : "Pull", action: { type: "remote.apply", path }, actionKey: `remote.apply:${path}`, danger: removed });
+    if (status === "local") sync.push({ label: removed ? "Restore" : "Revert", action: { type: "content.revert", path }, actionKey: `content.revert:${path}` });
+    if (sync.length) groups.push(sync);
+    if (inWorkspace && !removed) groups.push([{ label: "Make local only", action: { type: "content.localOnly", path, enabled: true } }]);
+  }
+  if (canToggleLocalDisable({ path, status, kind })) groups.push([{ label: disabled ? "Enable" : "Disable", action: { type: disabled ? "content.enable" : "content.disable", path } }]);
+  if (!removed) groups.push([{ label: "Rename", action: { type: "content.rename", path } }, { label: "Delete", action: { type: "content.delete", path }, danger: true }]);
+  return groups.flatMap((group, index) => index ? [{ separator: true as const }, ...group] : group);
 }
 
 export function matchesBusy(current: string | undefined, command?: string): boolean {

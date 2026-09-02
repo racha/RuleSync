@@ -7,7 +7,8 @@ import { acceptRisks, assertManagedCursorPath, authorshipCap, blobConcurrency, c
 import type { DashboardCommand } from "./protocol.js";
 import { VirtualDocumentStore } from "./virtualDocuments.js";
 import { assertSafeManagedPath, hash, listFiles, removeFile, renameFile, workspacePath, writeFile } from "./filesystem.js";
-import { folderGitlabBaseUrlKey, folderStateKey, folderUri, readFolderInitialized, readFolderOptOut, readFolderSources, writeFolderSetting } from "./folderConfig.js";
+import { excludeLocalOnly, isLocalOnlyPath, parseLocalOnlyRegistry, serializeLocalOnlyRegistry } from "./localOnly.js";
+import { folderGitlabBaseUrlKey, folderLocalOnlyKey, folderStateKey, folderUri, readFolderInitialized, readFolderOptOut, readFolderSources, writeFolderSetting } from "./folderConfig.js";
 
 export interface FolderSessionDeps {
   listFiles?: typeof listFiles;
@@ -47,6 +48,8 @@ export class FolderSession {
   #refreshing = false;
   #remote: RemoteSnapshot | undefined;
   #local: FileEntry[] = [];
+  #localOnlyItems: FileEntry[] = [];
+  #localOnly = new Set<string>();
   #disabled = new Set<string>();
   #plan: SyncPlan | undefined;
   #status: DashboardState["status"] = "unconfigured";
@@ -89,6 +92,8 @@ export class FolderSession {
     this.#watcher = undefined;
     if (!this.host.trusted()) {
       this.#local = [];
+      this.#localOnlyItems = [];
+      this.#localOnly = new Set();
       this.#disabled = new Set();
       this.#status = "needsReview";
       this.#statusMessage = "Trust this workspace before RuleSync reads local files or talks to a git host.";
@@ -99,6 +104,8 @@ export class FolderSession {
       await this.loadLocal();
     } catch (error) {
       this.#local = [];
+      this.#localOnlyItems = [];
+      this.#localOnly = new Set();
       this.#disabled = new Set();
       this.fail(error);
       return;
@@ -188,14 +195,20 @@ export class FolderSession {
         detail: [folder === "." ? undefined : folder, formatFileAuthorship(authorship ?? {})].filter(Boolean).join(" · "),
         createdBy: authorship?.createdBy,
         lastEditedBy: authorship?.lastEditedBy,
-        disabled: this.#disabled.has(itemPath)
+        disabled: this.#disabled.has(itemPath),
+        inWorkspace: this.#local.some((entry) => entry.path === itemPath)
       };
     });
+    for (const entry of this.#localOnlyItems) {
+      const folder = path.dirname(entry.path);
+      items.push({ path: entry.path, name: path.basename(entry.path), type: classifyCursorPath(entry.path), status: "synced", detail: folder === "." ? undefined : folder, disabled: this.#disabled.has(entry.path), localOnly: true, inWorkspace: true });
+    }
+    items.sort((left, right) => left.path.localeCompare(right.path));
     return {
       configured: Boolean(source),
       projectInitialized: this.projectInitialized(),
       workspaceName: this.name,
-      hasLocalCursorConfiguration: this.#local.length > 0,
+      hasLocalCursorConfiguration: this.#local.length + this.#localOnlyItems.length > 0,
       githubConnected: shared.githubConnected,
       gitlabConnected: shared.gitlabConnected,
       gitlabBaseUrl: this.#gitlabBaseUrl,
@@ -238,6 +251,7 @@ export class FolderSession {
       case "content.open": await this.open(command.path); return;
       case "content.diff": await this.diff(command.path, command.comparison); return;
       case "content.create": await this.create(command.request); return;
+      case "content.localOnly": await this.setLocalOnly(command.path, command.enabled); return;
       case "content.disable": await this.disable(command.path); return;
       case "content.enable": await this.enable(command.path); return;
       case "content.rename": await this.rename(command.path); return;
@@ -315,7 +329,7 @@ export class FolderSession {
         if (!this.currentWork(generation, identity)) return;
         const tree = await provider.getTree(source.repository, commit, cursorLocalRoot());
         if (!this.currentWork(generation, identity)) return;
-        const candidates = tree.filter((entry) => { try { assertManagedCursorPath(entry.path); return true; } catch { return false; } });
+        const candidates = tree.filter((entry) => { try { assertManagedCursorPath(entry.path); return !isLocalOnlyPath(entry.path, this.#localOnly); } catch { return false; } });
         if (candidates.length > managedFileCap) throw limitError("This repository has too many managed files for RuleSync to sync safely.");
         let declared = 0;
         for (const entry of candidates) {
@@ -480,10 +494,35 @@ export class FolderSession {
     if (!this.host.trusted()) throw new Error("Trust this workspace before RuleSync reads or writes local files.");
   }
 
+  private localOnlyPaths(): string[] {
+    return parseLocalOnlyRegistry(this.host.context.workspaceState.get(folderLocalOnlyKey(this.uri)));
+  }
+
+  private async saveLocalOnlyPaths(paths: readonly string[]): Promise<void> {
+    const next = serializeLocalOnlyRegistry(paths);
+    await this.host.context.workspaceState.update(folderLocalOnlyKey(this.uri), next.paths.length ? next : undefined);
+    this.#localOnly = new Set(next.paths);
+  }
+
+  private localEntry(itemPath: string): FileEntry | undefined {
+    return this.#local.find((entry) => entry.path === itemPath) ?? this.#localOnlyItems.find((entry) => entry.path === itemPath);
+  }
+
   private async loadLocal(): Promise<void> {
+    let registry: string[];
+    try { registry = this.localOnlyPaths(); } catch (error) {
+      this.#local = [];
+      this.#localOnlyItems = [];
+      this.#localOnly = new Set();
+      this.#disabled = new Set();
+      this.#plan = undefined;
+      throw error;
+    }
+    this.#localOnly = new Set(registry);
     const { entries, disabled } = foldLocalDisabled(await (this.host.deps.listFiles ?? listFiles)(this.root));
-    this.#local = entries;
     this.#disabled = new Set(disabled);
+    this.#local = excludeLocalOnly(entries, this.#localOnly);
+    this.#localOnlyItems = entries.filter((entry) => this.#localOnly.has(entry.path));
   }
 
   private diskPath(canonical: string): string {
@@ -539,7 +578,7 @@ export class FolderSession {
   }
 
   private rebuildPlan(): void {
-    const remote = this.#remote?.entries ?? [];
+    const remote = excludeLocalOnly(this.#remote?.entries ?? [], this.#localOnly);
     this.#plan = planSync({ baseline: this.state().entries, local: this.#local, remote, optOut: this.optOut(), classify: classifyCursorPath, risks: scanRisks([...this.#local, ...remote]), acceptedRisks: this.state().acceptedRisks });
   }
 
@@ -651,7 +690,7 @@ export class FolderSession {
   }
 
   private async open(itemPath: string): Promise<void> {
-    const local = this.#local.find((entry) => entry.path === itemPath);
+    const local = this.localEntry(itemPath);
     if (local) await vscode.window.showTextDocument(vscode.Uri.file(workspacePath(this.root, this.diskPath(itemPath))), { preview: true });
     else {
       const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
@@ -661,7 +700,7 @@ export class FolderSession {
 
   private async diff(itemPath: string, comparison: "remote" | "base"): Promise<void> {
     const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
-    const local = this.#local.find((entry) => entry.path === itemPath);
+    const local = this.localEntry(itemPath);
     if (!remote && !local) return;
     const incoming = comparison === "remote" && this.#plan?.changes.find((change) => change.path === itemPath)?.status === "incoming";
     const remoteUri = this.host.virtualDocuments.set("rulesync-remote", this.uri, itemPath, remote?.content);
@@ -677,15 +716,47 @@ export class FolderSession {
     this.assertTrusted();
     const content = createCursorContent(request);
     await (this.host.deps.writeFile ?? writeFile)(this.root, { path: content.path, content: new TextEncoder().encode(content.contents), contentHash: "", size: content.contents.length, mode: content.mode });
+    if (request.localOnly) {
+      try { await this.saveLocalOnlyPaths([...this.#localOnly, content.path]); } catch (error) {
+        await (this.host.deps.removeFile ?? removeFile)(this.root, content.path);
+        throw error;
+      }
+    }
     await this.onLocalChange();
     await this.open(content.path);
+  }
+
+  private async setLocalOnly(itemPath: string, enabled: boolean): Promise<void> {
+    this.assertTrusted();
+    const canonical = assertManagedCursorPath(itemPath);
+    if (enabled) {
+      if (!this.localEntry(canonical)) throw new Error("This file is not in the workspace.");
+      if (this.#localOnly.has(canonical)) return;
+      const answer = await vscode.window.showWarningMessage(`Stop syncing ${path.basename(canonical)}? Cursor will still use the file. Future proposals will ignore it.`, { modal: true }, "Make local only");
+      if (answer !== "Make local only") return;
+      await this.saveLocalOnlyPaths([...this.#localOnly, canonical]);
+      const state = this.state();
+      if (state.entries[canonical]) {
+        delete state.entries[canonical];
+        await this.saveState(state);
+      }
+      if (this.#remote) this.#remote = { ...this.#remote, entries: excludeLocalOnly(this.#remote.entries, this.#localOnly) };
+      await this.onLocalChange();
+      return;
+    }
+    if (!this.#localOnly.has(canonical)) return;
+    await this.saveLocalOnlyPaths([...this.#localOnly].filter((entry) => entry !== canonical));
+    await this.loadLocal();
+    if (this.source()) { await this.refresh(); return; }
+    this.rebuildPlan();
+    this.host.onChange();
   }
 
   private async disable(itemPath: string): Promise<void> {
     this.assertTrusted();
     const canonical = assertManagedCursorPath(itemPath);
     if (this.#disabled.has(canonical)) throw new Error("This file is already disabled.");
-    if (!this.#local.some((entry) => entry.path === canonical)) throw new Error("This file is not in the workspace.");
+    if (!this.localEntry(canonical)) throw new Error("This file is not in the workspace.");
     this.rebuildPlan();
     if (this.#plan?.changes.find((change) => change.path === canonical)?.status === "optedOut") throw new Error("Opted-out files cannot be disabled.");
     if (!canDisableManagedPath(canonical)) throw new Error("Hook scripts cannot be disabled. Disable .cursor/hooks.json to turn off project hooks.");
@@ -705,25 +776,37 @@ export class FolderSession {
 
   private async rename(previous: string): Promise<void> {
     this.assertTrusted();
-    if (!this.#local.some((entry) => entry.path === previous)) throw new Error("Pull this file before renaming it.");
+    if (!this.localEntry(previous)) throw new Error("Pull this file before renaming it.");
     const typed = await vscode.window.showInputBox({ title: "Rename managed file", prompt: "New path under .cursor", value: previous, validateInput: (value) => { try { managedRenamePath(previous, value); return; } catch (error) { return error instanceof Error ? error.message : "Invalid path"; } } });
     if (!typed) return;
     const next = managedRenamePath(previous, typed);
-    if (this.#local.some((entry) => entry.path === next)) throw new Error("A managed file already exists at that path.");
-    await (this.host.deps.renameFile ?? renameFile)(this.root, this.diskPath(previous), diskManagedPath(next, this.#disabled.has(previous)));
+    if (this.localEntry(next)) throw new Error("A managed file already exists at that path.");
+    const from = this.diskPath(previous);
+    const to = diskManagedPath(next, this.#disabled.has(previous));
+    await (this.host.deps.renameFile ?? renameFile)(this.root, from, to);
+    if (this.#localOnly.has(previous)) {
+      try { await this.saveLocalOnlyPaths([...this.#localOnly].filter((entry) => entry !== previous).concat(next)); } catch (error) {
+        await (this.host.deps.renameFile ?? renameFile)(this.root, to, from);
+        throw error;
+      }
+    }
     await this.onLocalChange();
   }
 
   private async delete(itemPath: string): Promise<void> {
     this.assertTrusted();
-    const answer = await vscode.window.showWarningMessage(`Delete ${path.basename(itemPath)} locally? This will become a proposal change.`, { modal: true }, "Delete");
+    const localOnly = this.#localOnly.has(itemPath);
+    const answer = await vscode.window.showWarningMessage(localOnly ? `Delete ${path.basename(itemPath)} locally? RuleSync is not tracking this file.` : `Delete ${path.basename(itemPath)} locally? This will become a proposal change.`, { modal: true }, "Delete");
     if (answer !== "Delete") return;
     await this.removeManaged(itemPath);
+    if (localOnly) await this.saveLocalOnlyPaths([...this.#localOnly].filter((entry) => entry !== itemPath));
     await this.onLocalChange();
+    if (localOnly && this.source()) await this.refresh();
   }
 
   private async revert(itemPath: string): Promise<void> {
     this.assertTrusted();
+    if (this.#localOnly.has(itemPath)) throw new Error("This file is local only.");
     const local = this.#local.find((entry) => entry.path === itemPath);
     const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
     if (!local && !remote) throw new Error("This file is not in the workspace.");
@@ -741,6 +824,7 @@ export class FolderSession {
   }
 
   private async resolve(itemPath: string, resolution: "local" | "remote"): Promise<void> {
+    if (this.#localOnly.has(itemPath)) throw new Error("This file is local only.");
     const remote = this.#remote?.entries.find((entry) => entry.path === itemPath);
     if (!remote) throw new Error("Remote content is unavailable for this conflict.");
     if (resolution === "remote") {
@@ -757,6 +841,7 @@ export class FolderSession {
   }
 
   private async applyOne(itemPath: string): Promise<void> {
+    if (this.#localOnly.has(itemPath)) throw new Error("This file is local only.");
     if (!await this.writeIncoming([itemPath])) return;
     this.#status = this.#plan?.incoming.length || this.#plan?.local.length || this.#plan?.conflicts.length ? "needsReview" : "synced";
     this.#statusMessage = `Pulled ${path.basename(itemPath)}.`;
@@ -815,6 +900,7 @@ export class FolderSession {
     const incoming = new Set(this.#plan.incoming.map((change) => change.path));
     for (const itemPath of paths) {
       assertManagedCursorPath(itemPath);
+      if (this.#localOnly.has(itemPath)) throw new Error("This file is local only.");
       if (!incoming.has(itemPath)) throw new Error(`${path.basename(itemPath)} is not waiting to be pulled.`);
     }
     const risky = this.outstandingRisks(paths);

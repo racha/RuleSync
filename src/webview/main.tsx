@@ -3,14 +3,14 @@ import { createRoot } from "react-dom/client";
 import React, { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import "./styles.css";
-import { awaitsHost, canToggleLocalDisable, connectSetupCopy, defaultSetupProvider, emptyRepositoryCopy, folderSwitchReset, gitlabHostSessionReady, hostIsApproved, legacyWorkspaceNotice, matchesBusy, proposalCommitMessage, recoveredGitlabUrl, repositorySetupCopy, setupGitlabKind, setupStatusNotice, splitRisks, visibleSetupRepos } from "./setup.js";
+import { awaitsHost, connectSetupCopy, defaultSetupProvider, emptyRepositoryCopy, folderSwitchReset, gitlabHostSessionReady, hostIsApproved, itemMenuEntries, legacyWorkspaceNotice, matchesBusy, proposalCommitMessage, recoveredGitlabUrl, repositorySetupCopy, setupGitlabKind, setupStatusNotice, splitRisks, visibleSetupRepos, type ItemMenuEntry } from "./setup.js";
 
 type ContentType = "rule" | "hook" | "skill" | "agent" | "command" | "mcp" | "configuration" | "other";
 type Status = "synced" | "incoming" | "local" | "conflict" | "converged" | "optedOut" | "proposed";
 type ChangeKind = "added" | "modified" | "deleted" | "mode";
 type Source = { id: string; provider: "github" | "gitlab"; repository: string; baseUrl?: string; ref?: string; profile: string; enabled?: boolean };
 type AvailableRepository = { repository: string; defaultBranch: string; private: boolean };
-type Item = { path: string; name: string; type: ContentType; status: Status; kind?: ChangeKind; detail?: string; createdBy?: string; lastEditedBy?: string; disabled?: boolean };
+type Item = { path: string; name: string; type: ContentType; status: Status; kind?: ChangeKind; detail?: string; createdBy?: string; lastEditedBy?: string; disabled?: boolean; localOnly?: boolean; inWorkspace?: boolean };
 type Risk = { path: string; severity: "warning" | "high"; code: string; message: string };
 type DashboardState = {
   configured: boolean; projectInitialized: boolean; hasLocalCursorConfiguration: boolean; githubConnected: boolean;   gitlabConnected: boolean; gitlabBaseUrl?: string; gitlabApprovedHosts?: string[];
@@ -542,7 +542,6 @@ function Overview({ state, go }: OverviewProps): React.JSX.Element {
   const { manifestStatus, source, branch, items, incomingCount, localCount, conflictCount } = state;
   const { workspaceName, activeProposal, repositoryUrl } = state;
   const changed = incomingCount + localCount + conflictCount;
-  const localDeletes = items.filter(({ status, kind }) => status === "local" && kind === "deleted").length;
   const emptyCopy = emptyRepositoryCopy({ repository: source?.repository, branch, host: hostLabel(state) });
   const pullRequest = activeProposal?.pullRequest;
 
@@ -568,11 +567,6 @@ function Overview({ state, go }: OverviewProps): React.JSX.Element {
       </div>
       <ActionButton className="primary" action={{ type: "proposal.openCompare" }} busyLabel={`Opening ${hostLabel(state)}…`}>{proposalActionLabel(state)}</ActionButton>
     </div>}
-
-    <div className="nextAction">
-      <span>Next best action</span>
-      <strong>{conflictCount ? "Resolve conflicts" : incomingCount ? "Review remote updates" : localCount && localDeletes === localCount ? "Restore deleted files from remote" : localCount ? "Publish local changes" : "Create or edit a rule"}</strong>
-    </div>
   </section>;
 }
 
@@ -620,36 +614,10 @@ function Library(props: LibraryProps): React.JSX.Element {
   </section>;
 }
 
-interface MenuAction {
-  label: string;
-  action: Command;
-  actionKey?: string;
-  danger?: boolean;
-}
-
-type MenuEntry = MenuAction | { separator: true };
-
-function itemMenuEntries(item: Item, conflict = false): MenuEntry[] {
-  const { path, status, kind, disabled } = item;
-  const removed = kind === "deleted";
-  const groups: MenuAction[][] = [[{ label: "Compare", action: { type: "content.diff", path, comparison: status === "incoming" ? "remote" : "base" } }]];
-  const sync: MenuAction[] = [];
-  if (conflict) {
-    sync.push({ label: "Keep local", action: { type: "conflict.resolve", path, resolution: "local" }, actionKey: `conflict.resolve:${path}:local` });
-    sync.push({ label: "Use remote", action: { type: "conflict.resolve", path, resolution: "remote" }, actionKey: `conflict.resolve:${path}:remote` });
-  }
-  if (status === "incoming") sync.push({ label: removed ? "Apply deletion" : "Pull", action: { type: "remote.apply", path }, actionKey: `remote.apply:${path}`, danger: removed });
-  if (status === "local") sync.push({ label: removed ? "Restore" : "Revert", action: { type: "content.revert", path }, actionKey: `content.revert:${path}` });
-  if (sync.length) groups.push(sync);
-  if (canToggleLocalDisable({ path, status, kind })) groups.push([{ label: disabled ? "Enable" : "Disable", action: { type: disabled ? "content.enable" : "content.disable", path } }]);
-  if (!removed) groups.push([{ label: "Rename", action: { type: "content.rename", path } }, { label: "Delete", action: { type: "content.delete", path }, danger: true }]);
-  return groups.flatMap((group, index) => index ? [{ separator: true as const }, ...group] : group);
-}
-
 interface ItemMenuProps {
   x: number;
   y: number;
-  entries: MenuEntry[];
+  entries: ItemMenuEntry[];
   anchor: React.RefObject<HTMLButtonElement | null>;
   onClose: () => void;
 }
@@ -707,7 +675,7 @@ interface FileRowProps {
 function FileRow({ item }: FileRowProps): React.JSX.Element {
   const [menu, setMenu] = useState<{ x: number; y: number }>();
   const moreRef = useRef<HTMLButtonElement>(null);
-  const { path, name, type, status, kind, detail, disabled } = item;
+  const { path, name, type, status, kind, detail, disabled, localOnly } = item;
   const removed = kind === "deleted";
 
   return <article className="fileRow">
@@ -716,7 +684,7 @@ function FileRow({ item }: FileRowProps): React.JSX.Element {
       <span className="fileCopy"><strong>{name}</strong><small>{detail}</small></span>
       <span className="fileBadges">
         {disabled && <span className="badge disabled">Disabled</span>}
-        <span className={`badge ${status}${removed ? " deleted" : ""}`}>{statusLabel(status, kind)}</span>
+        {localOnly ? <span className="badge localOnly">Local only</span> : <span className={`badge ${status}${removed ? " deleted" : ""}`}>{statusLabel(status, kind)}</span>}
       </span>
     </button>
 
@@ -735,9 +703,9 @@ interface ChangesProps {
 function Changes(props: ChangesProps): React.JSX.Element {
   const { state, proposalMessage, setProposalMessage } = props;
   const { items, risks, manifestStatus, source, branch, activeProposal, repositoryUrl } = state;
-  const incoming = items.filter((item) => item.status === "incoming");
-  const local = items.filter((item) => item.status === "local");
-  const conflicts = items.filter((item) => item.status === "conflict");
+  const incoming = items.filter((item) => item.status === "incoming" && !item.localOnly);
+  const local = items.filter((item) => item.status === "local" && !item.localOnly);
+  const conflicts = items.filter((item) => item.status === "conflict" && !item.localOnly);
   const emptyRepo = manifestStatus === "empty";
   const onlyLocalDeletes = !conflicts.length && !incoming.length && local.length > 0 && local.every(({ kind }) => kind === "deleted");
   const { high, warnings } = splitRisks(risks);
@@ -917,14 +885,16 @@ function CreateDialog({ onClose }: CreateDialogProps): React.JSX.Element {
   const [ruleMode, setRuleMode] = useState<"always" | "auto" | "agent" | "manual">("always");
   const [globs, setGlobs] = useState("");
   const [relativePath, setRelativePath] = useState("");
+  const [localOnly, setLocalOnly] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
   useEffect(() => { if (submitted && busy !== "content.create") onClose(); }, [submitted, busy, onClose]);
 
+  const request = { type, name, description, ruleMode, globs, relativePath, localOnly };
   const submit = (event: React.FormEvent) => {
     event.preventDefault();
     setSubmitted(true);
-    run({ type: "content.create", request: { type, name, description, ruleMode, globs, relativePath } });
+    run({ type: "content.create", request });
   };
 
   return <div className="modalBackdrop" role="presentation">
@@ -961,10 +931,12 @@ function CreateDialog({ onClose }: CreateDialogProps): React.JSX.Element {
         {ruleMode === "auto" && <label>Glob pattern<input value={globs} onChange={(event) => setGlobs(event.target.value)} placeholder="**/*.ts" /></label>}
       </>}
 
+      <label className="tick"><input type="checkbox" checked={localOnly} onChange={(event) => setLocalOnly(event.target.checked)} /><span>Local only — keep this file for Cursor, skip RuleSync proposals</span></label>
+
       <footer>
         <button type="button" className="secondary" onClick={onClose}>Cancel</button>
 
-        <ActionButton className="primary" type="submit" action={{ type: "content.create", request: { type, name, description, ruleMode, globs, relativePath } }} busyLabel="Creating…">Create</ActionButton>
+        <ActionButton className="primary" type="submit" action={{ type: "content.create", request }} busyLabel="Creating…">Create</ActionButton>
       </footer>
     </form>
   </div>;

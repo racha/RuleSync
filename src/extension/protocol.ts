@@ -19,9 +19,10 @@ export type DashboardCommand =
   | { type: "sync.refresh" }
   | { type: "content.open"; path: string }
   | { type: "content.diff"; path: string; comparison: "remote" | "base" }
-  | { type: "content.create"; request: { type: ContentType; name: string; description?: string; ruleMode?: "always" | "auto" | "agent" | "manual"; globs?: string; relativePath?: string } }
+  | { type: "content.create"; request: { type: ContentType; name: string; description?: string; ruleMode?: "always" | "auto" | "agent" | "manual"; globs?: string; relativePath?: string; localOnly?: boolean } }
   | { type: "content.disable"; path: string }
   | { type: "content.enable"; path: string }
+  | { type: "content.localOnly"; path: string; enabled: boolean }
   | { type: "content.rename"; path: string }
   | { type: "content.delete"; path: string }
   | { type: "content.revert"; path: string }

@@ -28,6 +28,7 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("content.diff"), path: z.string().min(1), comparison: z.enum(["remote", "base"]) }),
   z.object({ type: z.literal("content.disable"), path: z.string().min(1) }),
   z.object({ type: z.literal("content.enable"), path: z.string().min(1) }),
+  z.object({ type: z.literal("content.localOnly"), path: z.string().min(1), enabled: z.boolean() }),
   z.object({ type: z.literal("content.rename"), path: z.string().min(1) }),
   z.object({ type: z.literal("content.delete"), path: z.string().min(1) }),
   z.object({ type: z.literal("content.revert"), path: z.string().min(1) }),
@@ -45,5 +46,5 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("workspace.source.assign"), folderUri: z.string().min(1) }),
   z.object({ type: z.literal("workspace.source.discard") }),
   z.object({ type: z.literal("source.save"), source: sourceSaveSchema }),
-  z.object({ type: z.literal("content.create"), request: z.object({ type: z.enum(["rule", "hook", "skill", "agent", "command", "mcp", "configuration", "other"]), name: z.string().min(1).max(100), description: z.string().max(500).optional(), ruleMode: z.enum(["always", "auto", "agent", "manual"]).optional(), globs: z.string().max(200).optional(), relativePath: z.string().max(300).optional() }) })
+  z.object({ type: z.literal("content.create"), request: z.object({ type: z.enum(["rule", "hook", "skill", "agent", "command", "mcp", "configuration", "other"]), name: z.string().min(1).max(100), description: z.string().max(500).optional(), ruleMode: z.enum(["always", "auto", "agent", "manual"]).optional(), globs: z.string().max(200).optional(), relativePath: z.string().max(300).optional(), localOnly: z.boolean().optional() }) })
 ]);

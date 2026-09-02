@@ -63,6 +63,12 @@ describe("commandSchema", () => {
     expect(commandSchema.safeParse({ type: "remote.applyAll" }).success).toBe(true);
   });
 
+  it("accepts local-only create and toggle", () => {
+    expect(commandSchema.safeParse({ type: "content.localOnly", path: ".cursor/rules/foo.mdc", enabled: true }).success).toBe(true);
+    expect(commandSchema.safeParse({ type: "content.localOnly", path: ".cursor/rules/foo.mdc" }).success).toBe(false);
+    expect(commandSchema.safeParse({ type: "content.create", request: { type: "rule", name: "privacy", localOnly: true } }).success).toBe(true);
+  });
+
   it("accepts folder selection and legacy assignment commands", () => {
     expect(commandSchema.safeParse({ type: "folder.select", folderUri: "file:///tmp/a" }).success).toBe(true);
     expect(commandSchema.safeParse({ type: "workspace.source.assign", folderUri: "file:///tmp/a" }).success).toBe(true);
