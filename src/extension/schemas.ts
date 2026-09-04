@@ -40,6 +40,8 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("risk.accept"), path: z.string().min(1), code: z.enum(["secret", "executable", "hook", "mcp", "binary"]) }),
   z.object({ type: z.literal("proposal.publish"), message: z.string().max(300) }),
   z.object({ type: z.literal("proposal.openCompare") }),
+  z.object({ type: z.literal("review.open") }),
+  z.object({ type: z.literal("repository.open") }),
   z.object({ type: z.literal("settings.updateCheck"), settings: z.object({ mode: z.enum(["off", "timed", "events", "both"]), interval: z.enum(["hourly", "daily", "weekly"]), onStart: z.boolean(), onFocus: z.boolean(), onDashboardOpen: z.boolean() }) }),
   z.object({ type: z.literal("source.disconnect") }),
   z.object({ type: z.literal("folder.select"), folderUri: z.string().min(1) }),

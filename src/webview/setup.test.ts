@@ -84,6 +84,8 @@ describe("awaitsHost", () => {
     expect(awaitsHost("remote.restore")).toBe(true);
     expect(awaitsHost("content.localOnly")).toBe(true);
     expect(awaitsHost("proposal.openCompare")).toBe(true);
+    expect(awaitsHost("review.open")).toBe(true);
+    expect(awaitsHost("repository.open")).toBe(false);
     expect(awaitsHost("proposal.publish")).toBe(true);
     expect(awaitsHost("ready")).toBe(false);
     expect(awaitsHost("content.open")).toBe(false);

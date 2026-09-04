@@ -71,6 +71,12 @@ If the repository has no default branch, create it on GitHub or GitLab and check
 - Writes outside `.cursor` and symlinked destinations are rejected.
 - The shared branch is checked again before RuleSync creates or updates a proposal.
 
+## What’s new in 1.1.2
+
+- New Ready for Review
+- New repository link
+- BREAKING update-check onFocus default
+
 ## What’s new in 1.1.1
 
 - New local-only content

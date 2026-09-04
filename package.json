@@ -2,7 +2,7 @@
   "name": "rulesync",
   "displayName": "RuleSync",
   "description": "Review and share Cursor rules from GitHub or GitLab. Incoming updates stay reviewed. Local edits become a proposal branch.",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "publisher": "INVEON-Development",
   "license": "MIT",
   "icon": "resources/icon.png",
@@ -85,7 +85,7 @@
         "rulesync.updateCheck.mode": { "type": "string", "enum": ["off", "timed", "events", "both"], "default": "both", "description": "When RuleSync checks the connected source for rule updates." },
         "rulesync.updateCheck.interval": { "type": "string", "enum": ["hourly", "daily", "weekly"], "default": "daily", "description": "How often a scheduled check runs." },
         "rulesync.updateCheck.onStart": { "type": "boolean", "default": true, "description": "Check the connected source when the editor opens this workspace." },
-        "rulesync.updateCheck.onFocus": { "type": "boolean", "default": false, "description": "Check the connected source when the editor window is focused again." },
+        "rulesync.updateCheck.onFocus": { "type": "boolean", "default": true, "description": "Check the connected source when the editor window is focused again." },
         "rulesync.updateCheck.onDashboardOpen": { "type": "boolean", "default": true, "description": "Check the connected source when the RuleSync sidebar is opened." },
         "rulesync.checkIntervalMinutes": { "type": "number", "default": 15, "minimum": 5, "maximum": 1440, "description": "Deprecated. Use RuleSync settings to choose hourly, daily, or weekly checks." }
       }

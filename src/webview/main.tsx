@@ -19,6 +19,7 @@ type DashboardState = {
   status: "unconfigured" | "synced" | "checking" | "offline" | "error" | "needsReview"; statusMessage: string; lastCheckedAt?: string;
   items: Item[]; incomingCount: number; localCount: number; conflictCount: number; warningCount: number; proposedCount: number; risks: Risk[];
   activeProposal?: { branch: string; compareUrl: string; pullRequest?: { number: number; url: string; state: string } };
+  openReview?: { number: number; url: string; state: string };
   availableRepositories: AvailableRepository[]; repositoriesStatus: "idle" | "loading" | "ready" | "error"; repositoriesProvider?: "github" | "gitlab"; repositoriesMessage?: string;
   updateCheck: { mode: "off" | "timed" | "events" | "both"; interval: "hourly" | "daily" | "weekly"; onStart: boolean; onFocus: boolean; onDashboardOpen: boolean };
   folders: Array<{ uri: string; name: string; configured: boolean; status: "unconfigured" | "synced" | "checking" | "offline" | "error" | "needsReview"; incomingCount: number; localCount: number; conflictCount: number }>;
@@ -29,7 +30,7 @@ type DashboardState = {
 type Command = { type: string; [key: string]: unknown };
 declare function acquireVsCodeApi(): { postMessage(message: Command): void; getState(): unknown; setState(state: unknown): void };
 const vscode = acquireVsCodeApi();
-const empty: DashboardState = { configured: false, projectInitialized: false, hasLocalCursorConfiguration: false, githubConnected: false, gitlabConnected: false, gitlabApprovedHosts: [], manifestStatus: "notChecked", trusted: true, status: "unconfigured", statusMessage: "Initialize RuleSync for this folder.", items: [], incomingCount: 0, localCount: 0, conflictCount: 0, warningCount: 0, proposedCount: 0, risks: [], availableRepositories: [], repositoriesStatus: "idle", updateCheck: { mode: "both", interval: "daily", onStart: true, onFocus: false, onDashboardOpen: true }, folders: [] };
+const empty: DashboardState = { configured: false, projectInitialized: false, hasLocalCursorConfiguration: false, githubConnected: false, gitlabConnected: false, gitlabApprovedHosts: [], manifestStatus: "notChecked", trusted: true, status: "unconfigured", statusMessage: "Initialize RuleSync for this folder.", items: [], incomingCount: 0, localCount: 0, conflictCount: 0, warningCount: 0, proposedCount: 0, risks: [], availableRepositories: [], repositoriesStatus: "idle", updateCheck: { mode: "both", interval: "daily", onStart: true, onFocus: true, onDashboardOpen: true }, folders: [] };
 const labels: Record<ContentType, string> = { rule: "Rules", hook: "Hooks", skill: "Skills", agent: "Agents", command: "Commands", mcp: "MCP", configuration: "Configuration", other: "Other" };
 const order: ContentType[] = ["rule", "hook", "skill", "agent", "command", "mcp", "configuration", "other"];
 
@@ -157,6 +158,25 @@ function proposalActionLabel(state: DashboardState): string {
   const short = reviewShort(state);
   return state.activeProposal?.pullRequest ? `Open ${short} on ${hostLabel(state)}` : `Create ${short} on ${hostLabel(state)}`;
 }
+function readyReview(state: DashboardState): { number: number; url: string; state: string } | undefined { return state.openReview ?? state.activeProposal?.pullRequest; }
+
+interface ReviewCardProps {
+  state: DashboardState;
+}
+
+function ReviewCard({ state }: ReviewCardProps): React.JSX.Element | null {
+  const review = readyReview(state);
+  if (!review) return null;
+
+  return <div className="proposalCard">
+    <div className="proposalIcon">↗</div>
+    <div>
+      <strong>Ready for Review</strong>
+      <span>#{review.number}</span>
+    </div>
+    <ActionButton className="primary" action={{ type: "review.open" }} busyLabel={`Opening ${hostLabel(state)}…`}>{`Review on ${hostLabel(state)}`}</ActionButton>
+  </div>;
+}
 
 interface LogoMarkProps {
   compact?: boolean;
@@ -164,6 +184,17 @@ interface LogoMarkProps {
 
 function LogoMark({ compact = false }: LogoMarkProps): React.JSX.Element {
   return <svg className={compact ? "brandMark compact" : "brandMark"} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 2.75a9.25 9.25 0 1 0 0 18.5 9.25 9.25 0 0 0 0-18.5Z"/><path d="M7 9.1h8.2l-1.9-1.9M17 14.9H8.8l1.9 1.9"/><path d="M15.2 9.1 17 10.9M8.8 14.9 7 13.1"/></svg>;
+}
+
+interface RepoLinkProps {
+  repository: string;
+}
+
+function RepoLink({ repository }: RepoLinkProps): React.JSX.Element {
+  return <ActionButton className="repoLink" action={{ type: "repository.open" }} aria-label={`Open ${repository} repository`}>
+    <small>{repository}</small>
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.2 3.5H3.8A1.3 1.3 0 0 0 2.5 4.8v7.4A1.3 1.3 0 0 0 3.8 13.5h7.4a1.3 1.3 0 0 0 1.3-1.3V9.8M8.8 2.5h4.7v4.7M13.5 2.5 7.2 8.8" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"/></svg>
+  </ActionButton>;
 }
 
 interface PageHeaderProps {
@@ -276,7 +307,7 @@ function App(): React.JSX.Element {
         <div>
           <span>RULESYNC</span>
           <strong>{workspaceName ?? source?.repository}</strong>
-          {source?.repository && <small>{source.repository}</small>}
+          {source?.repository && <RepoLink repository={source.repository} />}
         </div>
       </div>
 
@@ -559,11 +590,13 @@ function Overview({ state, go }: OverviewProps): React.JSX.Element {
       <Metric value={conflictCount} label="Conflicts" tone="red" />
     </div>
 
-    {activeProposal && <div className="proposalCard">
+    <ReviewCard state={state} />
+
+    {activeProposal && !pullRequest && <div className="proposalCard">
       <div className="proposalIcon">↗</div>
       <div>
-        <strong>{pullRequest ? `${titleCase(reviewNoun(state))} detected` : "Proposal branch ready"}</strong>
-        <span>{pullRequest ? `#${pullRequest.number}` : activeProposal.branch}</span>
+        <strong>Proposal branch ready</strong>
+        <span>{activeProposal.branch}</span>
       </div>
       <ActionButton className="primary" action={{ type: "proposal.openCompare" }} busyLabel={`Opening ${hostLabel(state)}…`}>{proposalActionLabel(state)}</ActionButton>
     </div>}
@@ -703,6 +736,7 @@ interface ChangesProps {
 function Changes(props: ChangesProps): React.JSX.Element {
   const { state, proposalMessage, setProposalMessage } = props;
   const { items, risks, manifestStatus, source, branch, activeProposal, repositoryUrl } = state;
+  const review = readyReview(state);
   const incoming = items.filter((item) => item.status === "incoming" && !item.localOnly);
   const local = items.filter((item) => item.status === "local" && !item.localOnly);
   const conflicts = items.filter((item) => item.status === "conflict" && !item.localOnly);
@@ -715,6 +749,8 @@ function Changes(props: ChangesProps): React.JSX.Element {
 
   return <section className="content changes">
     <PageHeader eyebrow="REVIEW QUEUE" title={title} description={description} />
+
+    <ReviewCard state={state} />
 
     {emptyRepo && repositoryUrl && <a className="secondary" href={repositoryUrl}>{`Open ${source?.repository} on ${hostLabel(state)}`}</a>}
 
@@ -762,7 +798,7 @@ function Changes(props: ChangesProps): React.JSX.Element {
       <label>Commit message<input value={proposalMessage} onChange={(event) => setProposalMessage(event.target.value)} /></label>
       <ActionButton className="primary wide" action={{ type: "proposal.publish", message: proposalMessage }} busyLabel={activeProposal ? "Updating…" : "Publishing…"}>{activeProposal ? "Update proposal branch" : "Publish proposal branch"}</ActionButton>
 
-      {activeProposal && <ActionButton className="primary wide" action={{ type: "proposal.openCompare" }} busyLabel={`Opening ${hostLabel(state)}…`}>{proposalActionLabel(state)}</ActionButton>}
+      {activeProposal && !review && <ActionButton className="primary wide" action={{ type: "proposal.openCompare" }} busyLabel={`Opening ${hostLabel(state)}…`}>{proposalActionLabel(state)}</ActionButton>}
 
       <small>All RuleSync remote writes target proposal branches only. You create the final {reviewNoun(state)} on {hostLabel(state)}.</small>
     </div>}

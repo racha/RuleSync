@@ -4,6 +4,12 @@
 
 Nothing yet. We are enjoying the suspicious calm.
 
+## 1.1.2
+
+- New Ready for Review
+- New repository link
+- BREAKING update-check onFocus default
+
 ## 1.1.1
 
 - New local-only content

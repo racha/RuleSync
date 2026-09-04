@@ -93,7 +93,7 @@ export function hostIsApproved(baseUrl: string | undefined, approved: readonly s
   try { return isGitlabHostApproved(canonicalGitlabBaseUrl(baseUrl), approved); } catch { return false; }
 }
 
-const hostActions = new Set(["auth.start", "auth.forget", "workspace.initialize", "workspace.source.assign", "source.save", "source.disconnect", "github.repos.refresh", "gitlab.host.approve", "gitlab.pat.save", "gitlab.pat.forget", "gitlab.repos.refresh", "sync.refresh", "content.create", "content.localOnly", "content.revert", "conflict.resolve", "remote.apply", "remote.applyAll", "remote.restore", "risks.accept", "risk.accept", "proposal.publish", "proposal.openCompare"]);
+const hostActions = new Set(["auth.start", "auth.forget", "workspace.initialize", "workspace.source.assign", "source.save", "source.disconnect", "github.repos.refresh", "gitlab.host.approve", "gitlab.pat.save", "gitlab.pat.forget", "gitlab.repos.refresh", "sync.refresh", "content.create", "content.localOnly", "content.revert", "conflict.resolve", "remote.apply", "remote.applyAll", "remote.restore", "risks.accept", "risk.accept", "proposal.publish", "proposal.openCompare", "review.open"]);
 
 export function awaitsHost(type: string): boolean { return hostActions.has(type); }
 

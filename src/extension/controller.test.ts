@@ -149,6 +149,7 @@ function provider(overrides: Partial<RulesProvider> = {}): RulesProvider & { cal
     createProposal: async () => { calls.push("createProposal"); return { branch: "rulesync/ada/1", headCommit: "def", compareUrl: "https://github.com/acme/rules/compare/main...x" }; },
     createReviewRequest: async () => { calls.push("createReview"); return { number: 1, url: "https://github.com/acme/rules/pull/1", state: "open" as const }; },
     findReviewRequest: async () => { calls.push("findReview"); return undefined; },
+    listOpenReviewRequests: async () => { calls.push("listReviews"); return []; },
     compareUrl: () => "https://github.com/acme/rules/compare/main...x",
     repositoryUrl: () => "https://github.com/acme/rules",
     getFileAuthorship: async () => undefined,
@@ -1204,6 +1205,22 @@ describe("RuleSyncController", () => {
     await instance.handle({ type: "source.disconnect" });
     expect(vscode.workspaceState.get(localOnlyStateKey())).toEqual({ version: 1, paths: [".cursor/rules/privacy.mdc"] });
     expect(instance.dashboardState().items.find((item) => item.path === ".cursor/rules/privacy.mdc")?.localOnly).toBe(true);
+  });
+
+  it("surfaces an open pull request for every user and opens host links", async () => {
+    vscode.secrets.set("rulesync.github.accessToken", "gho-test");
+    vscode.config.projectInitialized = true;
+    vscode.config.sources = [{ id: "team", provider: "github", repository: "acme/rules", profile: "cursor-project", enabled: true }];
+    const opened: string[] = [];
+    vscode.env.openExternal = async (uri?: { toString: () => string }) => { if (uri) opened.push(uri.toString()); return true; };
+    const remote = hashed(".cursor/rules/foo.mdc", "same");
+    const { instance } = controller(connectedRemote(remote, { listOpenReviewRequests: async () => [{ number: 3, url: "https://github.com/acme/rules/pull/3", state: "open" as const }] }), [remote]);
+    await instance.initialize();
+    await instance.refresh();
+    expect(instance.dashboardState().openReview).toEqual({ number: 3, url: "https://github.com/acme/rules/pull/3", state: "open" });
+    await instance.handle({ type: "review.open" });
+    await instance.handle({ type: "repository.open" });
+    expect(opened).toEqual(["https://github.com/acme/rules/pull/3", "https://github.com/acme/rules"]);
   });
 
   it("isolates local-only registries across folders", async () => {

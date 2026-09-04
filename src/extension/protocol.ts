@@ -34,6 +34,8 @@ export type DashboardCommand =
   | { type: "risk.accept"; path: string; code: string }
   | { type: "proposal.publish"; message: string }
   | { type: "proposal.openCompare" }
+  | { type: "review.open" }
+  | { type: "repository.open" }
   | { type: "settings.updateCheck"; settings: UpdateCheckSettings }
   | { type: "source.disconnect" }
   | { type: "folder.select"; folderUri: string }

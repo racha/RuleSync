@@ -2,7 +2,7 @@ import path from "node:path";
 import * as vscode from "vscode";
 import chokidar, { type FSWatcher } from "chokidar";
 import { createCursorContent, classifyCursorPath, cursorLocalRoot } from "@rulesync/adapters";
-import { acceptRisks, assertManagedCursorPath, authorshipCap, blobConcurrency, canDisableManagedPath, canonicalGitlabBaseUrl, changeKey, configuredSource, disabledDiskPath, diskManagedPath, foldLocalDisabled, formatFileAuthorship, isConflict, isForbidden, isHighRisk, isNotFound, isTimeoutAbort, isUnauthorized, isUpdateCheckDue, limitError, managedFileCap, managedRenamePath, mapLimited, maxAggregateBytes, maxFileBytes, planSync, proposalCommitMessage, providerUserMessage, remoteUpdateMessage, scanRisks, shouldKeepProposal, shouldRunUpdateCheck, sourceIdentity, unseenKeys, updateCheckIntervalMs, type AvailableRepository, type DashboardFolder, type DashboardItem, type DashboardState, type FileEntry, type LegacyWorkspaceSource, type ProviderId, type RiskFinding, type RulesProvider, type SourceSpec, type SyncPlan, type SyncState, type UpdateCheckSettings, type UpdateCheckTrigger } from "@rulesync/core";
+import { acceptRisks, assertManagedCursorPath, authorshipCap, blobConcurrency, canDisableManagedPath, canonicalGitlabBaseUrl, changeKey, configuredSource, disabledDiskPath, diskManagedPath, foldLocalDisabled, formatFileAuthorship, isConflict, isForbidden, isHighRisk, isNotFound, isTimeoutAbort, isUnauthorized, isUpdateCheckDue, limitError, managedFileCap, managedRenamePath, mapLimited, maxAggregateBytes, maxFileBytes, planSync, proposalCommitMessage, providerUserMessage, remoteUpdateMessage, scanRisks, shouldKeepProposal, shouldRunUpdateCheck, sourceIdentity, unseenKeys, updateCheckIntervalMs, type AvailableRepository, type DashboardFolder, type DashboardItem, type DashboardState, type FileEntry, type LegacyWorkspaceSource, type ProviderId, type ReviewRequest, type RiskFinding, type RulesProvider, type SourceSpec, type SyncPlan, type SyncState, type UpdateCheckSettings, type UpdateCheckTrigger } from "@rulesync/core";
 
 import type { DashboardCommand } from "./protocol.js";
 import { VirtualDocumentStore } from "./virtualDocuments.js";
@@ -62,6 +62,7 @@ export class FolderSession {
   #authorship = new Map<string, { createdBy: string; lastEditedBy: string }>();
   #authorshipGeneration = 0;
   #gitlabBaseUrl = "https://gitlab.com";
+  #openReview: ReviewRequest | undefined;
 
   constructor(folder: vscode.WorkspaceFolder, private readonly host: FolderSessionHost) {
     this.folder = folder;
@@ -232,6 +233,7 @@ export class FolderSession {
       proposedCount: state.activeProposal ? this.#plan?.local.length ?? 0 : 0,
       risks: this.#plan?.risks ?? [],
       activeProposal: state.activeProposal,
+      openReview: this.#openReview,
       availableRepositories: shared.availableRepositories,
       repositoriesStatus: shared.repositoriesStatus,
       repositoriesProvider: shared.repositoriesProvider,
@@ -265,6 +267,8 @@ export class FolderSession {
       case "risk.accept": await this.acceptOneRisk(command.path, command.code); return;
       case "proposal.publish": await this.publishProposal(command.message); return;
       case "proposal.openCompare": await this.openCompare(); return;
+      case "review.open": await this.openReview(); return;
+      case "repository.open": await this.openRepository(); return;
       case "source.disconnect": await this.disconnect(); return;
       default: return;
     }
@@ -315,6 +319,7 @@ export class FolderSession {
           if ((isNotFound(error) || isConflict(error)) && await provider.isEmptyRepository(source.repository)) {
             if (!this.currentWork(generation, identity)) return;
             this.#remote = undefined;
+            this.#openReview = undefined;
             this.#manifestStatus = "empty";
             this.#manifestMessage = `${source.repository} has no ${branch} branch. Create ${branch} on ${this.hostLabel()} first.`;
             this.rebuildPlan();
@@ -355,6 +360,8 @@ export class FolderSession {
         await this.saveState(state, generation, identity);
         if (!this.currentWork(generation, identity)) return;
         this.rebuildPlan();
+        try { this.#openReview = (await provider.listOpenReviewRequests(source.repository, branch))[0]; } catch { this.#openReview = undefined; }
+        if (!this.currentWork(generation, identity)) return;
         if (state.activeProposal) {
           const pullRequest = await provider.findReviewRequest(source.repository, state.activeProposal.branch);
           if (!this.currentWork(generation, identity)) return;
@@ -444,6 +451,7 @@ export class FolderSession {
     this.#refreshAbort = new AbortController();
     this.#refreshing = false;
     this.#remote = undefined;
+    this.#openReview = undefined;
     this.#plan = undefined;
     this.#authorship.clear();
     this.#authorshipGeneration += 1;
@@ -975,10 +983,23 @@ export class FolderSession {
     await vscode.env.openExternal(vscode.Uri.parse(proposal.pullRequest?.url ?? proposal.compareUrl));
   }
 
+  private async openReview(): Promise<void> {
+    const url = this.#openReview?.url ?? this.state().activeProposal?.pullRequest?.url;
+    if (!url) throw new Error(`No ${this.reviewNoun()} is ready for review.`);
+    await vscode.env.openExternal(vscode.Uri.parse(url));
+  }
+
+  private async openRepository(): Promise<void> {
+    const source = this.source();
+    if (!source) throw new Error("Connect a repository first.");
+    await vscode.env.openExternal(vscode.Uri.parse(this.repositoryUrlFor(source)));
+  }
+
   async clearConfiguredSource(): Promise<void> {
     await writeFolderSetting(this.folder, "sources", []);
     await this.host.context.workspaceState.update(folderStateKey(this.uri), undefined);
     this.#remote = undefined;
+    this.#openReview = undefined;
     this.#manifestStatus = "notChecked";
     this.#manifestMessage = undefined;
   }

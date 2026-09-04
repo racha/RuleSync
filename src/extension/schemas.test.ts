@@ -58,6 +58,11 @@ describe("commandSchema", () => {
     expect(commandProvider({ type: "sync.refresh" })).toBeUndefined();
   });
 
+  it("accepts review and repository open commands", () => {
+    expect(commandSchema.safeParse({ type: "review.open" }).success).toBe(true);
+    expect(commandSchema.safeParse({ type: "repository.open" }).success).toBe(true);
+  });
+
   it("accepts restore from remote", () => {
     expect(commandSchema.safeParse({ type: "remote.restore" }).success).toBe(true);
     expect(commandSchema.safeParse({ type: "remote.applyAll" }).success).toBe(true);
